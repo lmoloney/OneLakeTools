@@ -1,0 +1,73 @@
+"""Tests for Pydantic models."""
+
+from onelake_client.models import (
+    Column,
+    DeltaTableInfo,
+    Lakehouse,
+    PathInfo,
+    Workspace,
+)
+
+
+def test_workspace_from_api_json():
+    """Test that Workspace can be constructed from Fabric API JSON (camelCase)."""
+    data = {
+        "id": "ws-001",
+        "displayName": "Test Workspace",
+        "description": "desc",
+        "type": "Workspace",
+        "capacityId": "cap-001",
+    }
+    ws = Workspace.model_validate(data)
+    assert ws.id == "ws-001"
+    assert ws.display_name == "Test Workspace"
+    assert ws.capacity_id == "cap-001"
+
+
+def test_workspace_from_snake_case():
+    """Test that Workspace can also be constructed with snake_case."""
+    ws = Workspace(
+        id="ws-001",
+        display_name="Test",
+        type="Workspace",
+    )
+    assert ws.display_name == "Test"
+
+
+def test_lakehouse_with_properties():
+    data = {
+        "id": "lh-001",
+        "displayName": "Sales",
+        "type": "Lakehouse",
+        "properties": {
+            "oneLakeTablesPath": "/tables",
+            "oneLakeFilesPath": "/files",
+            "sqlEndpointProperties": {
+                "id": "sql-001",
+                "provisioningStatus": "Success",
+            },
+        },
+    }
+    lh = Lakehouse.model_validate(data)
+    assert lh.properties.onelake_tables_path == "/tables"
+    assert lh.properties.sql_endpoint_properties.provisioning_status == "Success"
+
+
+def test_path_info_string_coercion():
+    """DFS API returns isDirectory as string — model should handle it."""
+    pi = PathInfo(name="test", isDirectory=True, contentLength=100)
+    assert pi.is_directory is True
+    assert pi.content_length == 100
+
+
+def test_delta_table_info():
+    info = DeltaTableInfo(
+        name="customers",
+        schema_=[Column(name="id", type="long"), Column(name="name", type="string")],
+        version=5,
+        num_files=10,
+        size_bytes=1048576,
+        partition_columns=["region"],
+    )
+    assert len(info.schema_) == 2
+    assert info.partition_columns == ["region"]

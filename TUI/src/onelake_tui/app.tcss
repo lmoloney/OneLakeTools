@@ -1,0 +1,97 @@
+/* OneLake TUI Stylesheet */
+
+Screen {
+    background: $surface;
+}
+
+Header {
+    dock: top;
+    background: $primary;
+}
+
+#main {
+    height: 1fr;
+}
+
+/* ── Left panel: workspace picker + items list ───────────────────────── */
+
+#picker-panel {
+    width: 1fr;
+    min-width: 25;
+    max-width: 40;
+}
+
+#search-input {
+    dock: top;
+    height: 3;
+    border: tall $accent;
+    background: $surface;
+}
+
+WorkspacePicker {
+    max-height: 10;
+}
+
+/* ── Right panel: tree + detail/preview ──────────────────────────────── */
+
+#content-panel {
+    width: 3fr;
+}
+
+#tree {
+    height: 2fr;
+    min-height: 15;
+    padding: 0 1;
+    border-bottom: tall $primary-background;
+    background: $surface-darken-1;
+}
+
+#detail {
+    height: 3fr;
+    padding: 1 2;
+}
+
+/* ── Tree styling ────────────────────────────────────────────────────── */
+
+OneLakeTree {
+    scrollbar-gutter: stable;
+}
+
+/* ── Detail panel ────────────────────────────────────────────────────── */
+
+DetailPanel {
+    scrollbar-gutter: stable;
+}
+
+DetailPanel .detail-title {
+    text-style: bold;
+    color: $accent;
+    margin-bottom: 1;
+}
+
+DetailPanel .detail-section {
+    margin-bottom: 0;
+}
+
+DetailPanel DataTable {
+    height: auto;
+    max-height: 24;
+    margin-top: 1;
+    margin-bottom: 1;
+}
+
+/* ── Status bar (3-line footer) ──────────────────────────────────────── */
+
+StatusBar {
+    dock: bottom;
+    height: 3;
+    background: $primary-background;
+    color: $text;
+    padding: 0 2;
+}
+
+/* ── Loading indicators ──────────────────────────────────────────────── */
+
+LoadingIndicator {
+    color: $accent;
+}
