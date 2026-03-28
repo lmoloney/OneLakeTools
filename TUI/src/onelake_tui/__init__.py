@@ -1,1 +1,1 @@
-"""OneLake TUI — Terminal UI for browsing Microsoft Fabric OneLake."""
+"""Unofficial OneLake TUI for browsing Microsoft Fabric OneLake."""

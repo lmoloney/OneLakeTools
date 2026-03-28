@@ -82,23 +82,31 @@ class DeltaTableReader:
             DeltaTableInfo with schema, version, file count, size, etc.
         """
         uri = _build_table_uri(workspace, item_path, table_name, self._dfs_host)
+        logger.debug("Loading Delta table: %s", uri)
 
         dt = await asyncio.to_thread(self._load_table_sync, uri)
 
         schema = _schema_to_columns(dt.schema())
         version = dt.version()
-        files = dt.files()
+        files = dt.file_uris()
         metadata = dt.metadata()
 
         # Sum file sizes from add actions
         size_bytes = 0
-        add_actions = await asyncio.to_thread(dt.get_add_actions, flatten=True)
-        if hasattr(add_actions, "to_pydict"):
-            size_dict = add_actions.to_pydict()
-            if "size_bytes" in size_dict:
-                size_bytes = sum(size_dict["size_bytes"])
-            elif "size" in size_dict:
-                size_bytes = sum(size_dict["size"])
+        try:
+            add_actions = await asyncio.to_thread(dt.get_add_actions, flatten=True)
+            if hasattr(add_actions, "to_pydict"):
+                # pyarrow Table (older deltalake)
+                size_dict = add_actions.to_pydict()
+                size_bytes = sum(size_dict.get("size_bytes", size_dict.get("size", [])))
+            elif hasattr(add_actions, "column"):
+                # arro3 Table (deltalake >= 1.0)
+                col_names = add_actions.column_names
+                size_key = "size_bytes" if "size_bytes" in col_names else "size"
+                if size_key in col_names:
+                    size_bytes = sum(add_actions.column(size_key).to_pylist())
+        except Exception:
+            logger.debug("Could not compute table size from add actions")
 
         return DeltaTableInfo(
             name=metadata.name or table_name,
@@ -111,6 +119,65 @@ class DeltaTableReader:
             description=metadata.description,
         )
 
+    async def read_sample(
+        self, workspace: str, item_path: str, table_name: str, *, limit: int = 100
+    ):
+        """Read a sample of rows from a Delta table.
+
+        Args:
+            workspace: Workspace name or GUID.
+            item_path: Item path like "MyLakehouse.Lakehouse".
+            table_name: Table name under Tables/.
+            limit: Maximum number of rows to return.
+
+        Returns:
+            pyarrow.Table with up to ``limit`` rows.
+        """
+        uri = _build_table_uri(workspace, item_path, table_name, self._dfs_host)
+        logger.debug("Reading sample (%d rows) from: %s", limit, uri)
+        dt = await asyncio.to_thread(self._load_table_sync, uri)
+
+        def _head():
+            ds = dt.to_pyarrow_dataset()
+            return ds.head(limit)
+
+        return await asyncio.to_thread(_head)
+
+    async def read_cdf(
+        self,
+        workspace: str,
+        item_path: str,
+        table_name: str,
+        *,
+        starting_version: int = 0,
+        ending_version: int | None = None,
+    ):
+        """Read Change Data Feed records from a Delta table.
+
+        Args:
+            workspace: Workspace name or GUID.
+            item_path: Item path.
+            table_name: Table name under Tables/.
+            starting_version: First version to include.
+            ending_version: Last version to include (None = latest).
+
+        Returns:
+            pyarrow.Table with CDF records including _change_type,
+            _commit_version, and _commit_timestamp columns.
+        """
+        uri = _build_table_uri(workspace, item_path, table_name, self._dfs_host)
+        logger.debug("Reading CDF from: %s (v%d→%s)", uri, starting_version, ending_version)
+        dt = await asyncio.to_thread(self._load_table_sync, uri)
+
+        def _load_cdf():
+            kwargs: dict = {"starting_version": starting_version}
+            if ending_version is not None:
+                kwargs["ending_version"] = ending_version
+            cdf = dt.load_cdf(**kwargs)
+            return cdf.read_all() if hasattr(cdf, "read_all") else cdf
+
+        return await asyncio.to_thread(_load_cdf)
+
     async def list_files(self, workspace: str, item_path: str, table_name: str) -> list[str]:
         """List data files in a Delta table.
 
@@ -119,4 +186,4 @@ class DeltaTableReader:
         """
         uri = _build_table_uri(workspace, item_path, table_name, self._dfs_host)
         dt = await asyncio.to_thread(self._load_table_sync, uri)
-        return dt.files()
+        return dt.file_uris()

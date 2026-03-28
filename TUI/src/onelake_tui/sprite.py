@@ -1,9 +1,8 @@
-"""OneLake block-art sprite with shimmer animation.
+"""Unofficial OneLake-inspired splash sprite with shimmer animation.
 
-Renders an ~24×12 diamond-shaped OneLake logo using Unicode block/quadrant
-characters. Colour gradient runs from deep navy (top) to bright cyan (bottom)
-matching the Fabric brand palette. A single left-to-right shimmer highlight
-sweeps on first display, then settles to static.
+Renders a wide lozenge shape using Unicode block characters and a deep
+navy-to-cyan gradient reminiscent of the public OneLake/Fabric palette. A
+single left-to-right shimmer highlight sweeps on first display, then settles.
 """
 
 from __future__ import annotations
@@ -27,27 +26,28 @@ _ROW_COLORS = [
 ]
 _SHIMMER_COLOR = "#E8F4FD"
 
-# ── Diamond shape (24 chars wide × 12 rows) ─────────────────────────────
+# ── Wide lozenge shape, closer to the public OneLake mark ───────────────
 _SHAPE = [
-    "          ▄██▄          ",
-    "        ▄██████▄        ",
-    "      ▄██████████▄      ",
-    "    ▄██████████████▄    ",
-    "  ▄██████████████████▄  ",
-    "████████████████████████",
-    "████████████████████████",
-    "  ▀██████████████████▀  ",
-    "    ▀██████████████▀    ",
-    "      ▀██████████▀      ",
-    "        ▀██████▀        ",
-    "          ▀██▀          ",
+    "             ▄▄▄▄▄▄▄▄             ",
+    "         ▄██████████████▄         ",
+    "      ▄████████████████████▄      ",
+    "   ▄██████████████████████████▄   ",
+    " ▄██████████████████████████████▄ ",
+    "▐████████████████████████████████▌",
+    " ▀██████████████████████████████▀ ",
+    "   ▀██████████████████████████▀   ",
+    "      ▀████████████████████▀      ",
+    "         ▀██████████████▀         ",
+    "            ▀████████▀            ",
 ]
 
-_WIDTH = 24
+_WIDTH = len(_SHAPE[0])
 _SHIMMER_BAND = 3
 
 WORDMARK = "[bold #0078D4]O N E L A K E[/]"
-TAGLINE = "[dim]Terminal Explorer for Microsoft Fabric[/]"
+BADGE = "[bold #FFB900]UNOFFICIAL TUI[/]"
+TAGLINE = "[dim]Community-built terminal UI for Microsoft Fabric OneLake[/]"
+DISCLAIMER = "[dim]Not affiliated with Microsoft[/]"
 
 
 def render_sprite(shimmer_col: int | None = None) -> str:
@@ -91,25 +91,32 @@ def render_sprite(shimmer_col: int | None = None) -> str:
 
 def get_welcome() -> str:
     """Full static welcome panel (sprite + wordmark + hints)."""
+    return _build_welcome()
+
+
+def _build_welcome(shimmer_col: int | None = None) -> str:
+    """Build the welcome panel with an optional shimmer frame."""
     return "\n".join(
         [
             "",
-            render_sprite(),
+            render_sprite(shimmer_col=shimmer_col),
             "",
-            f"       {WORDMARK}",
+            f"         {WORDMARK}",
+            f"          {BADGE}",
             "",
             f"  {TAGLINE}",
+            f"  {DISCLAIMER}",
             "  [dim]v0.1.0[/]",
             "",
             "  [dim]↑↓ Navigate  │  Enter Expand  │  / Search[/]",
-            "  [dim]Tab Switch panels  │  y Copy path  │  ? Help[/]",
+            "  [dim]Tab Switch panels  │  y Copy path  │  Y ABFSS  │  ^Y URL  │  ? Help[/]",
             "",
         ]
     )
 
 
 class OneLakeSprite(Static):
-    """Animated OneLake logo — plays a single shimmer sweep then settles."""
+    """Animated unofficial OneLake-inspired splash art."""
 
     DEFAULT_CSS = """
     OneLakeSprite {
@@ -138,19 +145,4 @@ class OneLakeSprite(Static):
 
     def _show_frame(self) -> None:
         col = self._frame if 0 <= self._frame < _WIDTH else None
-        content = "\n".join(
-            [
-                "",
-                render_sprite(shimmer_col=col),
-                "",
-                f"       {WORDMARK}",
-                "",
-                f"  {TAGLINE}",
-                "  [dim]v0.1.0[/]",
-                "",
-                "  [dim]↑↓ Navigate  │  Enter Expand  │  / Search[/]",
-                "  [dim]Tab Switch panels  │  y Copy path  │  ? Help[/]",
-                "",
-            ]
-        )
-        self.update(content)
+        self.update(_build_welcome(shimmer_col=col))

@@ -5,13 +5,24 @@ import csv
 import io
 import json
 import logging
+from datetime import UTC, datetime
 
 from rich.markup import escape as esc
 from rich.syntax import Syntax
 from textual import work
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
-from textual.widgets import DataTable, Label, Markdown, Static, TextArea
+from textual.widgets import (
+    Button,
+    DataTable,
+    Label,
+    LoadingIndicator,
+    Markdown,
+    Static,
+    TabbedContent,
+    TabPane,
+    TextArea,
+)
 
 from onelake_client import OneLakeClient
 from onelake_tui.nodes import FileNode, FolderNode, TableNode
@@ -84,6 +95,11 @@ class DetailPanel(VerticalScroll):
         self.client = client
         self._workspace_name: str = ""
         self._item_name: str = ""
+        self._current_table_data: TableNode | None = None
+        self._current_delta_info = None
+        self._data_preview_loaded: bool = False
+        self._debounce_timer = None
+        self._pending_node: NodeData = None
 
     def set_context(self, workspace_name: str, item_name: str) -> None:
         """Set human-readable names for path display."""
@@ -94,7 +110,15 @@ class DetailPanel(VerticalScroll):
         yield OneLakeSprite(animate=True, id="detail-content")
 
     def update_for_node(self, data: NodeData) -> None:
-        """Update the panel to show details for the given node data."""
+        """Update the panel — debounced to avoid API spam on rapid arrow keys."""
+        self._pending_node = data
+        if self._debounce_timer is not None:
+            self._debounce_timer.stop()
+        self._debounce_timer = self.set_timer(0.15, self._apply_pending_node)
+
+    def _apply_pending_node(self) -> None:
+        """Apply the debounced node update."""
+        data = self._pending_node
         if data is None:
             self._show_placeholder()
         elif isinstance(data, FolderNode):
@@ -106,6 +130,9 @@ class DetailPanel(VerticalScroll):
 
     def _clear(self) -> None:
         """Remove all children."""
+        self._current_table_data = None
+        self._current_delta_info = None
+        self._data_preview_loaded = False
         self.remove_children()
 
     def _show_placeholder(self) -> None:
@@ -130,7 +157,7 @@ class DetailPanel(VerticalScroll):
         self.mount(Static(f"[b]Size:[/b] {_format_size(data.size)}", classes="detail-section"))
         self._load_file_properties(data)
 
-    @work(group="detail_load")
+    @work(exclusive=True, group="detail_load")
     async def _load_file_properties(self, data: FileNode) -> None:
         """Load file properties via DFS HEAD request."""
         try:
@@ -152,27 +179,44 @@ class DetailPanel(VerticalScroll):
         except Exception as e:
             logger.debug("Could not load file properties: %s", e)
 
+    # ── Delta table tabbed view ─────────────────────────────────────────
+
     def _show_table(self, data: TableNode) -> None:
         self._clear()
+        self._current_table_data = data
         self.mount(Label(f"🗃️ {data.table_name}", classes="detail-title"))
         friendly = f"onelake://{self._workspace_name}/{self._item_name}/Tables/{data.table_name}"
         self.mount(Static(f"[b]Path:[/b] {esc(friendly)}", classes="detail-section"))
-        self.mount(Static("Loading table metadata...", classes="detail-section table-loading"))
+        self.mount(LoadingIndicator(id="table-spinner"))
         self._load_table_metadata(data)
 
-    @work(group="detail_load")
+    @work(exclusive=True, group="detail_load")
     async def _load_table_metadata(self, data: TableNode) -> None:
-        """Load Delta table metadata and show schema."""
+        """Load Delta table metadata and build tabbed view."""
         try:
+            logger.debug(
+                "Loading delta metadata: workspace=%s item=%s table=%s",
+                data.workspace,
+                data.item_path,
+                data.table_name,
+            )
             info = await self.client.delta.get_metadata(
                 data.workspace, data.item_path, data.table_name
             )
+            self._current_delta_info = info
 
-            # Remove loading placeholder
-            for w in self.query(".table-loading"):
-                w.remove()
+            # Remove loading spinner
+            with contextlib.suppress(Exception):
+                self.query_one("#table-spinner").remove()
 
-            self.mount(
+            # Build tabbed interface
+            tc = TabbedContent(id="table-tabs")
+            await self.mount(tc)
+
+            # ── Schema tab ──────────────────────────────────────────────
+            schema_pane = TabPane("Schema", id="tab-schema")
+            await tc.add_pane(schema_pane)
+            await schema_pane.mount(
                 Static(
                     f"[b]Version:[/b] {info.version}  "
                     f"[b]Files:[/b] {info.num_files}  "
@@ -180,40 +224,96 @@ class DetailPanel(VerticalScroll):
                     classes="detail-section",
                 )
             )
-
             if info.partition_columns:
-                self.mount(
+                await schema_pane.mount(
                     Static(
                         f"[b]Partitioned by:[/b] {esc(', '.join(info.partition_columns))}",
                         classes="detail-section",
                     )
                 )
-
             if info.description:
-                self.mount(
+                await schema_pane.mount(
                     Static(
                         f"[b]Description:[/b] {esc(info.description)}",
                         classes="detail-section",
                     )
                 )
-
             if info.schema_:
-                self.mount(Label("Schema", classes="detail-title"))
-                table = DataTable(id="schema-table")
-                self.mount(table)
-                table.add_columns("Name", "Type", "Nullable")
+                await schema_pane.mount(Label("Columns", classes="detail-title"))
+                schema_table = DataTable()
+                await schema_pane.mount(schema_table)
+                schema_table.add_columns("Name", "Type", "Nullable")
                 for col in info.schema_:
-                    table.add_row(col.name, col.type, "✓" if col.nullable else "✗")
+                    schema_table.add_row(col.name, col.type, "✓" if col.nullable else "✗")
+
+            # ── Data Preview tab (lazy) ─────────────────────────────────
+            data_pane = TabPane("Data", id="tab-data")
+            await tc.add_pane(data_pane)
+            await data_pane.mount(
+                Button(
+                    "Load Data Preview",
+                    id="load-data-preview",
+                    variant="primary",
+                )
+            )
+            await data_pane.mount(
+                Static(
+                    "[dim]Reads parquet data files from OneLake (first 100 rows)[/dim]",
+                    classes="detail-section",
+                )
+            )
+
+            # ── Transactions tab ────────────────────────────────────────
+            txn_pane = TabPane("History", id="tab-history")
+            await tc.add_pane(txn_pane)
+            await txn_pane.mount(LoadingIndicator(id="txn-loading"))
+            self._load_transaction_log(data)
+
+            # ── CDF tab (conditional) ───────────────────────────────────
+            cdf_enabled = info.properties.get("delta.enableChangeDataFeed") == "true"
+            if cdf_enabled:
+                cdf_pane = TabPane("CDF", id="tab-cdf")
+                await tc.add_pane(cdf_pane)
+                await cdf_pane.mount(
+                    Static(
+                        "[b]Change Data Feed[/b] is enabled for this table.",
+                        classes="detail-section",
+                    )
+                )
+                await cdf_pane.mount(
+                    Button(
+                        "Load CDF Preview",
+                        id="load-cdf-preview",
+                        variant="primary",
+                    )
+                )
+                await cdf_pane.mount(
+                    Static(
+                        "[dim]Shows recent change records "
+                        "(_change_type, _commit_version, _commit_timestamp)[/dim]",
+                        classes="detail-section",
+                    )
+                )
 
         except Exception as e:
-            for w in self.query(".table-loading"):
-                w.remove()
+            with contextlib.suppress(Exception):
+                self.query_one("#table-spinner").remove()
             err_msg = str(e)
             if "No files in log" in err_msg or "log segment" in err_msg:
                 self.mount(
                     Static(
                         "[dim]Not a Delta table (may be Iceberg or empty). "
                         "Expand the node in the tree to browse raw files.[/dim]",
+                        classes="detail-section",
+                    )
+                )
+            elif "reader features" in err_msg and "not yet supported" in err_msg:
+                self.mount(
+                    Static(
+                        "⚠️ [yellow]This table uses advanced Delta features "
+                        "(e.g. deletion vectors) not fully supported by the local reader. "
+                        "Schema and history tabs may still work — "
+                        "try the Data tab for a raw parquet preview.[/yellow]",
                         classes="detail-section",
                     )
                 )
@@ -226,7 +326,252 @@ class DetailPanel(VerticalScroll):
                 )
             logger.debug("Table metadata unavailable for %s: %s", data.table_name, e)
 
-    @work(group="detail_load")
+    @work(group="detail_aux")
+    async def _load_transaction_log(self, data: TableNode) -> None:
+        """Read _delta_log/*.json commit files and display as summary table."""
+        try:
+            log_dir = f"{data.item_path}/Tables/{data.table_name}/_delta_log"
+            paths = await self.client.dfs.list_paths(data.workspace, log_dir)
+
+            json_files = sorted(
+                [p for p in paths if p.name.endswith(".json")],
+                key=lambda p: p.name,
+                reverse=True,
+            )[:20]
+
+            commits: list[dict] = []
+            for pf in json_files:
+                raw = await self.client.dfs.read_file(data.workspace, pf.name)
+                for line in raw.decode("utf-8", errors="replace").strip().splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                        if "commitInfo" in obj:
+                            ci = obj["commitInfo"]
+                            fname = pf.name.split("/")[-1]
+                            version = fname.replace(".json", "").lstrip("0") or "0"
+                            # Use commitInfo.timestamp (ms epoch), fall back to file lastModified
+                            ts_raw = ci.get("timestamp")
+                            if ts_raw is None and pf.last_modified:
+                                ts_raw = pf.last_modified
+                            commits.append(
+                                {
+                                    "version": version,
+                                    "timestamp": ts_raw,
+                                    "operation": ci.get("operation", ""),
+                                    "metrics": ci.get("operationMetrics", {}),
+                                }
+                            )
+                    except json.JSONDecodeError:
+                        continue
+
+            with contextlib.suppress(Exception):
+                self.query_one("#txn-loading").remove()
+
+            txn_pane = self.query_one("#tab-history", TabPane)
+            if commits:
+                tbl = DataTable(id="txn-table")
+                await txn_pane.mount(tbl)
+                tbl.add_columns("Version", "Timestamp", "Operation", "Metrics")
+                for c in commits:
+                    ts = c["timestamp"]
+                    if isinstance(ts, datetime):
+                        ts = ts.strftime("%Y-%m-%d %H:%M:%S UTC")
+                    elif isinstance(ts, (int, float)):
+                        ts = datetime.fromtimestamp(ts / 1000, tz=UTC).strftime(
+                            "%Y-%m-%d %H:%M:%S UTC"
+                        )
+                    else:
+                        ts = str(ts) if ts else ""
+                    metrics = c.get("metrics") or {}
+                    metrics_str = (
+                        ", ".join(f"{k}={v}" for k, v in metrics.items()) if metrics else ""
+                    )
+                    tbl.add_row(str(c["version"]), str(ts), c["operation"], metrics_str)
+            else:
+                await txn_pane.mount(Static("[dim]No transaction history found[/dim]"))
+        except Exception as e:
+            with contextlib.suppress(Exception):
+                self.query_one("#txn-loading").remove()
+            try:
+                txn_pane = self.query_one("#tab-history", TabPane)
+                await txn_pane.mount(
+                    Static(f"❌ Could not load history: {esc(str(e))}", classes="detail-section")
+                )
+            except Exception:
+                pass
+            logger.debug("Transaction log load failed: %s", e)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle lazy-load buttons in delta table tabs."""
+        if event.button.id == "load-data-preview":
+            self._load_data_preview()
+        elif event.button.id == "load-cdf-preview":
+            self._load_cdf_preview()
+
+    @work(group="detail_aux")
+    async def _load_data_preview(self) -> None:
+        """Fetch first 100 rows from the Delta table's parquet files."""
+        data = self._current_table_data
+        if data is None:
+            return
+
+        with contextlib.suppress(Exception):
+            self.query_one("#load-data-preview", Button).remove()
+
+        data_pane = self.query_one("#tab-data", TabPane)
+        for child in list(data_pane.children):
+            child.remove()
+        await data_pane.mount(
+            Static("Loading data preview…", id="data-loading", classes="detail-section")
+        )
+
+        try:
+            sample = await self.client.delta.read_sample(
+                data.workspace, data.item_path, data.table_name
+            )
+            await self._render_data_table(data_pane, sample)
+        except Exception as e:
+            err_msg = str(e)
+            # Handle unsupported reader features (e.g. deletionVectors)
+            if "reader features" in err_msg and "not yet supported" in err_msg:
+                logger.debug(
+                    "Delta reader unsupported features, falling back to DFS parquet: %s", e
+                )
+                with contextlib.suppress(Exception):
+                    self.query_one("#data-loading").remove()
+                await data_pane.mount(
+                    Static(
+                        "⚠️ [yellow]Table uses advanced Delta features "
+                        "(e.g. deletion vectors) not supported by the local reader. "
+                        "Falling back to raw parquet preview — "
+                        "may include soft-deleted rows.[/yellow]",
+                        classes="detail-section",
+                    )
+                )
+                try:
+                    sample = await self._read_parquet_fallback(data)
+                    await self._render_data_table(data_pane, sample)
+                except Exception as fallback_err:
+                    await data_pane.mount(
+                        Static(
+                            f"❌ Fallback preview also failed: {esc(str(fallback_err))}",
+                            classes="detail-section",
+                        )
+                    )
+                    logger.debug("Parquet fallback failed: %s", fallback_err)
+            else:
+                with contextlib.suppress(Exception):
+                    self.query_one("#data-loading").remove()
+                await data_pane.mount(
+                    Static(f"❌ Data preview failed: {esc(err_msg)}", classes="detail-section")
+                )
+                logger.debug("Data preview failed: %s", e)
+
+    async def _render_data_table(self, pane: TabPane, sample) -> None:
+        """Render a pyarrow.Table sample into a DataTable widget."""
+        with contextlib.suppress(Exception):
+            self.query_one("#data-loading").remove()
+
+        if sample.num_rows == 0:
+            await pane.mount(Static("[dim]Table is empty[/dim]"))
+            return
+
+        await pane.mount(
+            Static(
+                f"[dim]Showing first {sample.num_rows} rows[/dim]",
+                classes="detail-section",
+            )
+        )
+        tbl = DataTable(id="data-preview-table")
+        await pane.mount(tbl)
+        col_names = sample.column_names
+        tbl.add_columns(*col_names)
+        for row_idx in range(sample.num_rows):
+            row = [str(sample.column(c)[row_idx]) for c in range(len(col_names))]
+            tbl.add_row(*row)
+        self._data_preview_loaded = True
+
+    async def _read_parquet_fallback(self, data: TableNode):
+        """Read parquet files directly via DFS when deltalake library fails."""
+        import pyarrow.parquet as pq
+
+        table_dir = f"{data.item_path}/Tables/{data.table_name}"
+        paths = await self.client.dfs.list_paths(data.workspace, table_dir)
+
+        parquet_files = [p for p in paths if not p.is_directory and p.name.endswith(".parquet")]
+        if not parquet_files:
+            raise FileNotFoundError("No parquet files found in table directory")
+
+        # Read the first (largest) parquet file for a representative sample
+        parquet_files.sort(key=lambda p: p.content_length or 0, reverse=True)
+        target = parquet_files[0]
+        raw = await self.client.dfs.read_file(data.workspace, target.name)
+        pf = pq.ParquetFile(io.BytesIO(raw))
+        return pf.read_row_groups([0]).slice(0, 100)
+
+    @work(group="detail_aux")
+    async def _load_cdf_preview(self) -> None:
+        """Load Change Data Feed records from the Delta table."""
+        data = self._current_table_data
+        info = self._current_delta_info
+        if data is None or info is None:
+            return
+
+        with contextlib.suppress(Exception):
+            self.query_one("#load-cdf-preview", Button).remove()
+
+        cdf_pane = self.query_one("#tab-cdf", TabPane)
+        # Clear placeholder content but keep the status line
+        for child in list(cdf_pane.children):
+            child.remove()
+        await cdf_pane.mount(
+            Static("Loading CDF data…", id="cdf-loading", classes="detail-section")
+        )
+
+        try:
+            starting = max(0, info.version - 10)
+            cdf_table = await self.client.delta.read_cdf(
+                data.workspace,
+                data.item_path,
+                data.table_name,
+                starting_version=starting,
+            )
+
+            with contextlib.suppress(Exception):
+                self.query_one("#cdf-loading").remove()
+
+            if cdf_table.num_rows == 0:
+                await cdf_pane.mount(Static("[dim]No CDF records in the last 10 versions[/dim]"))
+                return
+
+            await cdf_pane.mount(
+                Static(
+                    f"[dim]Showing {min(cdf_table.num_rows, 100)} of {cdf_table.num_rows} "
+                    f"CDF records (versions {starting}–{info.version})[/dim]",
+                    classes="detail-section",
+                )
+            )
+            tbl = DataTable(id="cdf-table")
+            await cdf_pane.mount(tbl)
+            col_names = cdf_table.column_names
+            tbl.add_columns(*col_names)
+            for row_idx in range(min(cdf_table.num_rows, 100)):
+                row = [str(cdf_table.column(c)[row_idx]) for c in range(len(col_names))]
+                tbl.add_row(*row)
+        except Exception as e:
+            with contextlib.suppress(Exception):
+                self.query_one("#cdf-loading").remove()
+            await cdf_pane.mount(
+                Static(f"❌ CDF preview failed: {esc(str(e))}", classes="detail-section")
+            )
+            logger.debug("CDF preview failed: %s", e)
+
+    # ── File preview ────────────────────────────────────────────────────
+
+    @work(exclusive=True, group="detail_load")
     async def preview_file(self, data: FileNode) -> None:
         """Fetch and render a rich preview of file contents."""
         self._clear()
@@ -241,11 +586,13 @@ class DetailPanel(VerticalScroll):
                 classes="detail-section",
             )
         )
-        self.mount(Static("Loading preview...", id="preview-loading", classes="detail-section"))
+        self.mount(Static("Loading preview…", id="preview-loading", classes="detail-section"))
 
         try:
             if ext == ".parquet":
                 await self._preview_parquet(data)
+            elif ext == ".avro":
+                await self._preview_avro(data)
             elif data.size > _MAX_PREVIEW_BYTES:
                 raw = await self.client.dfs.read_file(data.workspace, data.path)
                 text = raw[:_MAX_PREVIEW_BYTES].decode("utf-8", errors="replace")
@@ -388,6 +735,91 @@ class DetailPanel(VerticalScroll):
             self._remove_loading()
             self.mount(Static(f"❌ Parquet error: {esc(str(e))}", classes="detail-section"))
             logger.exception("Failed to preview parquet %s", data.path)
+
+    async def _preview_avro(self, data: FileNode) -> None:
+        """Read Avro file with fastavro and display schema + sample rows."""
+        try:
+            import fastavro
+
+            raw = await self.client.dfs.read_file(data.workspace, data.path)
+            buf = io.BytesIO(raw)
+            reader = fastavro.reader(buf)
+            avro_schema = reader.writer_schema
+
+            self._remove_loading()
+
+            # Schema info from Avro schema
+            fields = avro_schema.get("fields", []) if avro_schema else []
+            self.mount(
+                Static(
+                    f"[b]Format:[/b] Apache Avro  [b]Columns:[/b] {len(fields)}",
+                    classes="detail-section",
+                )
+            )
+            if avro_schema and avro_schema.get("name"):
+                self.mount(
+                    Static(
+                        f"[b]Record type:[/b] {esc(avro_schema['name'])}",
+                        classes="detail-section",
+                    )
+                )
+
+            # Schema table
+            if fields:
+                self.mount(Label("Schema", classes="detail-title"))
+                schema_table = DataTable(id="schema-table")
+                self.mount(schema_table)
+                schema_table.add_columns("Column", "Type", "Nullable")
+                for f in fields:
+                    ftype = f.get("type", "unknown")
+                    nullable = False
+                    # Avro union types: ["null", "string"] means nullable string
+                    if isinstance(ftype, list):
+                        nullable = "null" in ftype
+                        non_null = [t for t in ftype if t != "null"]
+                        ftype = non_null[0] if len(non_null) == 1 else str(non_null)
+                    elif isinstance(ftype, dict):
+                        ftype = ftype.get("type", str(ftype))
+                    schema_table.add_row(
+                        f.get("name", "?"),
+                        str(ftype),
+                        "✓" if nullable else "✗",
+                    )
+
+            # Sample data (first 100 rows)
+            rows_data: list[dict] = []
+            for i, record in enumerate(reader):
+                if i >= 100:
+                    break
+                rows_data.append(record)
+
+            if rows_data:
+                col_names = [f.get("name", f"col_{i}") for i, f in enumerate(fields)]
+                if not col_names and rows_data:
+                    col_names = list(rows_data[0].keys())
+
+                self.mount(Label(f"Data (first {len(rows_data)} rows)", classes="detail-title"))
+                data_table = DataTable(id="preview-content")
+                self.mount(data_table)
+                data_table.add_columns(*col_names)
+                for record in rows_data:
+                    row = [str(record.get(c, "")) for c in col_names]
+                    data_table.add_row(*row)
+            else:
+                self.mount(Static("[dim](empty Avro file)[/dim]", classes="detail-section"))
+
+        except ImportError:
+            self._remove_loading()
+            self.mount(
+                Static(
+                    "❌ fastavro not installed. Run: pip install fastavro",
+                    classes="detail-section",
+                )
+            )
+        except Exception as e:
+            self._remove_loading()
+            self.mount(Static(f"❌ Avro error: {esc(str(e))}", classes="detail-section"))
+            logger.exception("Failed to preview avro %s", data.path)
 
     def _render_hex(self, raw: bytes) -> None:
         """Render a hex dump of binary content."""

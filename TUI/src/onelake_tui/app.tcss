@@ -90,7 +90,58 @@ StatusBar {
     padding: 0 2;
 }
 
+/* ── Tabbed content in detail panel ──────────────────────────────────── */
+
+DetailPanel TabbedContent {
+    height: auto;
+    min-height: 10;
+}
+
+DetailPanel TabPane {
+    padding: 1 1;
+}
+
+DetailPanel TabPane DataTable {
+    height: auto;
+    max-height: 20;
+    margin-top: 1;
+}
+
+DetailPanel TabPane .detail-section {
+    margin-bottom: 0;
+}
+
+DetailPanel TabPane .detail-title {
+    text-style: bold;
+    color: $accent;
+    margin-bottom: 1;
+}
+
+DetailPanel #load-data-preview,
+DetailPanel #load-cdf-preview {
+    margin: 2 0;
+}
+
+/* ── Focus ring — highlight active panel ──────────────────────────────── */
+
+#picker-panel:focus-within {
+    border: tall $accent;
+}
+
+#tree:focus-within {
+    border-bottom: tall $accent;
+}
+
+#detail:focus-within {
+    border-top: tall $accent;
+}
+
 /* ── Loading indicators ──────────────────────────────────────────────── */
+
+DetailPanel LoadingIndicator {
+    height: 3;
+    color: $accent;
+}
 
 LoadingIndicator {
     color: $accent;

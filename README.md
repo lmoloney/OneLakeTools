@@ -1,20 +1,20 @@
 # OneLakeTools
 
-Developer tools for [Microsoft Fabric](https://learn.microsoft.com/en-us/fabric/) OneLake.
+Unofficial developer tools for [Microsoft Fabric](https://learn.microsoft.com/en-us/fabric/) OneLake.
 
 ## Tools
 
-### 🖥️ OneLake TUI ([`TUI/`](TUI/))
+### 🖥️ OneLake TUI (Unofficial) ([`TUI/`](TUI/))
 
-A terminal UI for browsing Fabric workspaces, lakehouses, and Delta tables — built with [Textual](https://textual.textualize.io/).
+An unofficial terminal UI for browsing Fabric workspaces, lakehouses, and Delta tables — built with [Textual](https://textual.textualize.io/).
 
 **Features:**
 - Three-panel layout: workspace picker → item list → DFS tree + preview
-- Animated OneLake block-art logo with Fabric-branded shimmer
+- Animated OneLake-inspired splash art with Fabric-styled shimmer
 - Live `/` search filtering workspaces
-- Rich file preview: Markdown, JSON (NDJSON), CSV, Parquet (pyarrow), syntax-highlighted code
+- Rich file preview: Markdown, JSON (NDJSON), CSV, Parquet (pyarrow), Avro (fastavro), syntax-highlighted code
 - Selectable/copyable preview text
-- Delta table metadata: schema, version, partitions
+- Delta table tabbed detail: schema, data preview, transaction history, CDF
 - Schema-aware table detection (mirrored DB `Tables/schema/table` + lakehouse `Tables/table`)
 - Expandable tables — browse raw `_delta_log/`, parquet files
 - Human-readable `onelake://` paths everywhere
@@ -79,7 +79,7 @@ Each environment maps to the correct Fabric REST and OneLake DFS hostnames autom
 ```bash
 cd TUI
 uv sync --all-extras    # Install all dependencies
-uv run pytest           # Run tests (20 unit + 6 integration)
+uv run pytest           # Run tests (43 unit + 6 integration)
 uv run ruff check src/  # Lint
 uv run onelake-tui      # Launch the TUI
 ```
@@ -104,7 +104,7 @@ OneLakeTools/
 │   │       ├── item_list.py   #   Item list for selected workspace
 │   │       ├── tree.py        #   DFS file tree (single item)
 │   │       ├── detail.py      #   Detail/preview with rich rendering
-│   │       ├── sprite.py      #   OneLake block-art logo + animation
+│   │       ├── sprite.py      #   OneLake-inspired splash art + animation
 │   │       ├── status_bar.py  #   3-line footer
 │   │       └── nodes.py       #   Node dataclasses
 │   ├── tests/                 # Unit + integration tests
@@ -117,9 +117,9 @@ OneLakeTools/
 
 | Tool | Status |
 |------|--------|
-| OneLake TUI | ✅ Working (browse, preview, inspect, copy path) |
-| File preview (MD/JSON/CSV/Parquet) | ✅ Done |
-| Delta table metadata | ✅ Done |
+| OneLake TUI (Unofficial) | ✅ Working (browse, preview, inspect, copy path) |
+| File preview (MD/JSON/CSV/Parquet/Avro) | ✅ Done |
+| Delta table detail (schema/data/history/CDF) | ✅ Done |
 | Workspace search/filter | ✅ Done |
 | OneLake CLI | 🔲 Planned (`onelake ls`, `onelake cat`, `onelake cp`) |
 | Download/upload | 🔲 Planned |

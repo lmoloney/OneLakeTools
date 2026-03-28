@@ -1,22 +1,27 @@
-# OneLake Explorer
+# OneLake TUI (Unofficial)
 
-A terminal UI for browsing Microsoft Fabric workspaces, lakehouses, and Delta tables — built with [Textual](https://textual.textualize.io/).
+An unofficial terminal UI for browsing Microsoft Fabric workspaces, lakehouses, and Delta tables — built with [Textual](https://textual.textualize.io/).
 
 <!-- TODO: Add screenshot -->
 
 ## Features
 
 - **Three-panel layout** — workspace picker → item list → DFS file tree + detail/preview
-- **OneLake block-art sprite** — animated startup logo with Fabric-branded shimmer
+- **OneLake-inspired splash art** — animated startup logo with Fabric-styled shimmer
 - **Live search** — press `/` to filter workspaces instantly
 - **File preview** — Enter on any file for rich rendering:
   - **Markdown** rendered natively
   - **JSON** pretty-printed (handles NDJSON/Delta log format)
   - **CSV** displayed as a DataTable
   - **Parquet** schema + first 100 rows via pyarrow
+  - **Avro** schema + first 100 rows via fastavro
   - **Code** syntax-highlighted (Python, SQL, YAML, etc.)
   - All previews are **selectable/copyable** via TextArea
-- **Delta table metadata** — schema, version, partitions, file count
+- **Delta table metadata** — tabbed detail view:
+  - **Schema** tab — version, files, size, partitions, column DataTable
+  - **Data** tab — lazy-loaded first 100 rows (with deletionVectors fallback)
+  - **History** tab — transaction log from `_delta_log/*.json` with timestamps
+  - **CDF** tab — conditional, only shown when Change Data Feed is enabled
 - **Schema-aware table detection** — supports `Tables/schema/table` (mirrored DBs) and `Tables/table` (lakehouses)
 - **Expandable tables** — browse raw `_delta_log/`, parquet files, metadata
 - **Human-readable paths** — `onelake://workspace/item/path` everywhere
@@ -51,11 +56,14 @@ uv run onelake-tui
 | Key | Action |
 |-----|--------|
 | `↑` / `↓` | Navigate |
+| `←` / `→` | Collapse/expand tree nodes |
 | `Enter` | Preview file / Expand folder |
 | `/` | Search/filter workspaces |
 | `Escape` | Close search / go back |
 | `Tab` / `Shift+Tab` | Switch panels |
-| `y` | Copy OneLake path to clipboard |
+| `y` | Copy `onelake://` path to clipboard |
+| `Y` (Shift) | Copy `abfss://` GUID path to clipboard |
+| `Ctrl+Y` | Copy `https://` DFS URL to clipboard |
 | `r` | Refresh |
 | `?` | Show help |
 | `q` | Quit |
@@ -80,7 +88,7 @@ TUI/src/
     ├── item_list.py           #   Item list for selected workspace
     ├── tree.py                #   DFS file tree (single item)
     ├── detail.py              #   Detail/preview panel with rich rendering
-    ├── sprite.py              #   OneLake block-art logo + shimmer animation
+    ├── sprite.py              #   OneLake-inspired splash art + shimmer animation
     ├── status_bar.py          #   3-line footer (path, shortcuts, auth)
     ├── nodes.py               #   Node dataclasses
     └── banner.py              #   Welcome screen delegate
@@ -124,7 +132,7 @@ tail -f ~/.onelake-tui/debug.log
 ```bash
 cd TUI
 uv sync --all-extras
-uv run pytest           # 20 unit + 6 integration tests
+uv run pytest           # 43 unit + 6 integration tests
 uv run ruff check src/  # Lint
 uv run ruff format src/ # Format
 ```

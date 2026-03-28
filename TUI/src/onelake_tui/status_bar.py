@@ -1,4 +1,4 @@
-"""Status bar widget for OneLake TUI — 3-line footer with shortcuts."""
+"""Status bar widget for the unofficial OneLake TUI."""
 
 from __future__ import annotations
 
@@ -25,7 +25,10 @@ class StatusBar(Static):
         line1 = "  │  ".join(line1_parts)
 
         # Line 2: keyboard shortcuts (always visible)
-        line2 = "↑↓ Navigate │ Enter Preview │ / Search │ Tab Panel │ Esc Back │ q Quit"
+        line2 = (
+            "↑↓ Navigate │ Enter Preview │ / Search │ Tab Panel │ "
+            "y Copy │ Y ABFSS │ ^Y URL │ q Quit"
+        )
 
         # Line 3: auth + environment
         env_tag = f"[{self.env_name}]" if self.env_name != "PROD" else "PROD"

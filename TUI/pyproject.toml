@@ -1,7 +1,7 @@
 [project]
 name = "onelake-tools"
 version = "0.1.0"
-description = "TUI and client library for Microsoft Fabric OneLake"
+description = "Unofficial TUI and client library for Microsoft Fabric OneLake"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -12,6 +12,7 @@ dependencies = [
     "deltalake>=0.22",
     "pyiceberg>=0.8",
     "pyarrow>=14.0",
+    "fastavro>=1.9",
     "textual>=1.0",
 ]
 

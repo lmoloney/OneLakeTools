@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from textual import work
+from textual import events, work
 from textual.widgets import Tree
 from textual.widgets._tree import TreeNode
 
@@ -58,6 +58,31 @@ class OneLakeTree(Tree[NodeData]):
         self._current_item: Item | None = None
         self._current_workspace_id: str = ""
         self._current_workspace_name: str = ""
+
+    def on_key(self, event: events.Key) -> None:
+        """Arrow-key tree navigation (file-manager style).
+
+        Right: expand collapsed node, or move to first child if already open.
+        Left: collapse expanded node, or move to parent if already collapsed.
+        """
+        node = self.cursor_node
+        if node is None:
+            return
+
+        if event.key == "right":
+            if node.allow_expand and not node.is_expanded:
+                node.expand()
+                event.prevent_default()
+            elif node.is_expanded and node.children:
+                self.cursor_line = node.children[0].line
+                event.prevent_default()
+        elif event.key == "left":
+            if node.is_expanded:
+                node.collapse()
+                event.prevent_default()
+            elif node.parent is not None and node.parent != self.root:
+                self.cursor_line = node.parent.line
+                event.prevent_default()
 
     @work(exclusive=True, group="load_item")
     async def load_item(self, workspace_id: str, workspace_name: str, item: Item) -> None:

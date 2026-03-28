@@ -1,4 +1,4 @@
-"""OneLake TUI — Terminal UI for browsing Microsoft Fabric OneLake."""
+"""Unofficial OneLake TUI for browsing Microsoft Fabric OneLake."""
 
 from __future__ import annotations
 
@@ -46,22 +46,24 @@ def _setup_logging() -> None:
     root_logger.addHandler(handler)
     root_logger.setLevel(logging.DEBUG)
 
-    logging.getLogger("onelake_client").info("--- OneLake TUI session started ---")
+    logging.getLogger("onelake_client").info("--- OneLake TUI (Unofficial) session started ---")
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 class OneLakeApp(App):
-    """A TUI for browsing Microsoft Fabric OneLake."""
+    """An unofficial TUI for browsing Microsoft Fabric OneLake."""
 
-    TITLE = "OneLake Explorer"
-    SUB_TITLE = "Browse workspaces, lakehouses, and tables"
+    TITLE = "OneLake TUI (Unofficial)"
+    SUB_TITLE = "Community-built terminal UI for Microsoft Fabric OneLake"
     CSS_PATH = "app.tcss"
 
     BINDINGS = [
         Binding("q", "quit", "Quit", priority=True),
         Binding("r", "refresh", "Refresh"),
         Binding("y", "copy_path", "Copy Path"),
+        Binding("Y", "copy_abfss", "Copy ABFSS", show=False),
+        Binding("ctrl+y", "copy_https", "Copy URL", show=False),
         Binding("slash", "search", "Search", show=True, priority=True),
         Binding("question_mark", "help", "Help"),
         Binding("tab", "focus_next", "Next Panel", show=False),
@@ -85,7 +87,7 @@ class OneLakeApp(App):
         self.query_one("#search-input", Input).display = False
         # Show environment ring in subtitle and status bar
         ring = f"  [{self._env.name}]" if self._env.name != "PROD" else ""
-        self.sub_title = f"Browse workspaces, lakehouses, and tables{ring}"
+        self.sub_title = f"{self.SUB_TITLE}{ring}"
         self.query_one(StatusBar).env_name = self._env.name
         if self._auth_error:
             self.notify(
@@ -189,7 +191,8 @@ class OneLakeApp(App):
     def action_help(self) -> None:
         """Show keyboard shortcuts."""
         self.notify(
-            "↑↓ Navigate  │  Enter Preview  │  / Search  │  r Refresh  │  q Quit",
+            "↑↓ Navigate  │  Enter Preview  │  / Search  │  r Refresh  │  q Quit\n"
+            "y Copy path  │  Y Copy ABFSS  │  Ctrl+Y Copy URL",
             timeout=10,
         )
 
@@ -200,22 +203,48 @@ class OneLakeApp(App):
             detail = self.query_one("#detail", DetailPanel)
             detail.preview_file(data)
 
+    # ── Clipboard helpers ───────────────────────────────────────────────
+
+    def _copy_to_clipboard(self, text: str, label: str) -> None:
+        """Copy text to clipboard and show notification."""
+        try:
+            subprocess.run(["pbcopy"], input=text.encode(), check=True)
+            self.notify(f"Copied {label}: {text}", timeout=3)
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            self.notify(f"{label}: {text}", timeout=5)
+
     def action_copy_path(self) -> None:
-        """Copy the current OneLake path to clipboard."""
+        """Copy the current OneLake path (named) to clipboard."""
         tree = self.query_one("#tree", OneLakeTree)
         node = tree.cursor_node
         if node is None or node.data is None:
             self.notify("No item selected", severity="warning")
             return
-
-        data = node.data
-        path = self._node_to_path(data)
+        path = self._node_to_path(node.data)
         if path:
-            try:
-                subprocess.run(["pbcopy"], input=path.encode(), check=True)
-                self.notify(f"Copied: {path}", timeout=3)
-            except (FileNotFoundError, subprocess.CalledProcessError):
-                self.notify(f"Path: {path}", timeout=5)
+            self._copy_to_clipboard(path, "path")
+
+    def action_copy_abfss(self) -> None:
+        """Copy the ABFSS GUID-based path to clipboard."""
+        tree = self.query_one("#tree", OneLakeTree)
+        node = tree.cursor_node
+        if node is None or node.data is None:
+            self.notify("No item selected", severity="warning")
+            return
+        path = self._node_to_abfss(node.data)
+        if path:
+            self._copy_to_clipboard(path, "ABFSS")
+
+    def action_copy_https(self) -> None:
+        """Copy the HTTPS DFS URL to clipboard."""
+        tree = self.query_one("#tree", OneLakeTree)
+        node = tree.cursor_node
+        if node is None or node.data is None:
+            self.notify("No item selected", severity="warning")
+            return
+        path = self._node_to_https(node.data)
+        if path:
+            self._copy_to_clipboard(path, "URL")
 
     def _node_to_path(self, data: object) -> str | None:
         """Convert node data to a human-readable OneLake path string."""
@@ -232,6 +261,34 @@ class OneLakeApp(App):
             return f"onelake://{ws_name}/{item_name}/{rel}"
         elif isinstance(data, TableNode):
             return f"onelake://{ws_name}/{item_name}/Tables/{data.table_name}"
+        return None
+
+    def _node_to_abfss(self, data: object) -> str | None:
+        """Convert node data to an abfss:// GUID-based path."""
+        tree = self.query_one("#tree", OneLakeTree)
+        ws_id = tree._current_workspace_id
+        host = self.client.env.dfs_host
+
+        if isinstance(data, FolderNode):
+            return f"abfss://{ws_id}@{host}/{data.directory}"
+        elif isinstance(data, FileNode):
+            return f"abfss://{ws_id}@{host}/{data.path}"
+        elif isinstance(data, TableNode):
+            return f"abfss://{ws_id}@{host}/{data.item_path}/Tables/{data.table_name}"
+        return None
+
+    def _node_to_https(self, data: object) -> str | None:
+        """Convert node data to an https:// DFS URL."""
+        tree = self.query_one("#tree", OneLakeTree)
+        ws_id = tree._current_workspace_id
+        host = self.client.env.dfs_host
+
+        if isinstance(data, FolderNode):
+            return f"https://{host}/{ws_id}/{data.directory}"
+        elif isinstance(data, FileNode):
+            return f"https://{host}/{ws_id}/{data.path}"
+        elif isinstance(data, TableNode):
+            return f"https://{host}/{ws_id}/{data.item_path}/Tables/{data.table_name}"
         return None
 
     def action_refresh(self) -> None:
