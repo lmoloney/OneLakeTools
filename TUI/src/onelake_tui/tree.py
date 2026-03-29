@@ -144,7 +144,7 @@ class OneLakeTree(Tree[NodeData]):
         elif isinstance(data, TableNode):
             self._load_table_files(node, data)
 
-    @work(group="load_children")
+    @work(group="load_children", exclusive=True)
     async def _load_folder(self, node: TreeNode, data: FolderNode) -> None:
         """Load children of a DFS folder."""
         node.remove_children()
@@ -211,7 +211,7 @@ class OneLakeTree(Tree[NodeData]):
                 markup=False,
             )
 
-    @work(group="load_children")
+    @work(group="load_children", exclusive=True)
     async def _load_table_files(self, node: TreeNode, data: TableNode) -> None:
         """Load contents of a table dir — detect schema folders vs actual tables."""
         node.remove_children()
@@ -268,6 +268,12 @@ class OneLakeTree(Tree[NodeData]):
         except Exception as e:
             node.add_leaf(f"❌ {e}", data=None)
             logger.exception("Failed to load table files for %s", data.table_name)
+            self.app.notify(
+                f"Error loading table: {e}",
+                severity="error",
+                timeout=20,
+                markup=False,
+            )
 
     def refresh_tree(self) -> None:
         """Reload the current item's DFS tree, or clear if none selected."""

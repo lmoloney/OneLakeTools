@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
 import httpx
@@ -33,12 +34,14 @@ class FabricClient:
         self._base_url = env.fabric_api_url
         self._client = client
         self._owns_client = client is None
+        self._client_lock = asyncio.Lock()
 
     async def _get_client(self) -> httpx.AsyncClient:
-        if self._client is None:
-            self._client = create_client(base_url=self._base_url)
-            self._owns_client = True
-        return self._client
+        async with self._client_lock:
+            if self._client is None:
+                self._client = create_client(base_url=self._base_url)
+                self._owns_client = True
+            return self._client
 
     async def close(self) -> None:
         if self._owns_client and self._client is not None:

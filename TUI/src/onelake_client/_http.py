@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import random
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -75,6 +77,7 @@ async def request_with_retry(
                 )
                 await asyncio.sleep(wait)
                 backoff *= 2
+                backoff *= 0.5 + random.random()
                 continue
 
             # Last attempt — raise the error
@@ -94,6 +97,7 @@ async def request_with_retry(
                 )
                 await asyncio.sleep(backoff)
                 backoff *= 2
+                backoff *= 0.5 + random.random()
                 continue
             msg = f"Transport error after {max_retries + 1} attempts: {exc}"
             raise ApiError(0, message=msg) from exc
@@ -142,20 +146,34 @@ async def paginate_fabric(
     headers: dict[str, str],
     params: dict[str, Any] | None = None,
     value_key: str = "value",
+    max_items: int | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Paginate through Fabric REST API responses.
 
     Fabric REST API uses `continuationToken` in the response body
     and accepts it as a query parameter for the next page.
+
+    Args:
+        max_items: Stop after yielding this many items. None means unlimited.
     """
     params = dict(params or {})
+    count = 0
 
     while True:
         response = await request_with_retry(client, "GET", url, headers=headers, params=params)
-        data = response.json()
+        try:
+            data = response.json()
+        except json.JSONDecodeError as e:
+            raise ApiError(
+                status_code=response.status_code,
+                message=f"Malformed JSON in API response: {e}",
+            ) from e
 
         for item in data.get(value_key, []):
             yield item
+            count += 1
+            if max_items is not None and count >= max_items:
+                return
 
         continuation = data.get("continuationToken")
         if not continuation:
@@ -169,21 +187,35 @@ async def paginate_dfs(
     *,
     headers: dict[str, str],
     params: dict[str, Any] | None = None,
+    max_items: int | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Paginate through DFS (ADLS Gen2) list responses.
 
     DFS API returns a `continuation` header for the next page
     and uses `continuation` as a query parameter.
     The response body contains a `paths` array.
+
+    Args:
+        max_items: Stop after yielding this many items. None means unlimited.
     """
     params = dict(params or {})
+    count = 0
 
     while True:
         response = await request_with_retry(client, "GET", url, headers=headers, params=params)
-        data = response.json()
+        try:
+            data = response.json()
+        except json.JSONDecodeError as e:
+            raise ApiError(
+                status_code=response.status_code,
+                message=f"Malformed JSON in API response: {e}",
+            ) from e
 
         for item in data.get("paths", []):
             yield item
+            count += 1
+            if max_items is not None and count >= max_items:
+                return
 
         continuation = response.headers.get("x-ms-continuation")
         if not continuation:

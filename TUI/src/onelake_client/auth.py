@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+
+from azure.core.exceptions import ClientAuthenticationError
+
+from onelake_client.exceptions import AuthenticationError
 
 if TYPE_CHECKING:
     from azure.core.credentials import TokenCredential
@@ -59,19 +64,25 @@ class OneLakeAuth:
             env = DEFAULT_ENVIRONMENT
         self._env = env
         self._token_cache: dict[str, _CachedToken] = {}
+        self._locks: dict[str, threading.Lock] = {}
 
     def get_token(self, scope: str) -> str:
         """Get a valid access token for the given scope, using cache."""
-        cached = self._token_cache.get(scope)
-        if cached is not None and not cached.is_expired:
-            return cached.token
+        lock = self._locks.setdefault(scope, threading.Lock())
+        with lock:
+            cached = self._token_cache.get(scope)
+            if cached is not None and not cached.is_expired:
+                return cached.token
 
-        result = self._credential.get_token(scope)
-        self._token_cache[scope] = _CachedToken(
-            token=result.token,
-            expires_on=result.expires_on,
-        )
-        return result.token
+            try:
+                result = self._credential.get_token(scope)
+            except ClientAuthenticationError as exc:
+                raise AuthenticationError(str(exc)) from exc
+            self._token_cache[scope] = _CachedToken(
+                token=result.token,
+                expires_on=result.expires_on,
+            )
+            return result.token
 
     def fabric_headers(self) -> dict[str, str]:
         """Authorization headers for Fabric REST API requests."""
@@ -91,6 +102,11 @@ class OneLakeAuth:
             "account_host": self._env.dfs_host,
             "azure_storage_token": token,
         }
+
+    @property
+    def env(self) -> FabricEnvironment:
+        """The active Fabric environment configuration."""
+        return self._env
 
     @property
     def credential(self) -> TokenCredential:

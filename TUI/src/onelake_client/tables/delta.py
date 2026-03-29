@@ -4,6 +4,8 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
+from deltalake.exceptions import DeltaError
+
 from onelake_client.models.table import Column, DeltaTableInfo
 
 if TYPE_CHECKING:
@@ -105,8 +107,8 @@ class DeltaTableReader:
                 size_key = "size_bytes" if "size_bytes" in col_names else "size"
                 if size_key in col_names:
                     size_bytes = sum(add_actions.column(size_key).to_pylist())
-        except Exception:
-            logger.debug("Could not compute table size from add actions")
+        except (DeltaError, KeyError, IndexError, ValueError) as e:
+            logger.warning("Failed to compute Delta table size: %s", e)
 
         return DeltaTableInfo(
             name=metadata.name or table_name,

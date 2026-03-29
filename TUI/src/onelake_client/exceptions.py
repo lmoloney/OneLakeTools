@@ -29,6 +29,15 @@ class RateLimitError(OneLakeError):
         super().__init__(message or f"Rate limited. Retry after {retry_after}s")
 
 
+class FileTooLargeError(OneLakeError):
+    """File exceeds the caller-specified size limit."""
+
+    def __init__(self, size: int, max_bytes: int):
+        self.size = size
+        self.max_bytes = max_bytes
+        super().__init__(f"File size {size} bytes exceeds limit of {max_bytes} bytes")
+
+
 class ApiError(OneLakeError):
     """Catch-all for other API errors."""
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import csv
 import io
+import itertools
 import json
 import logging
 from datetime import UTC, datetime
@@ -12,6 +13,7 @@ from rich.syntax import Syntax
 from textual import work
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
+from textual.css.query import NoMatches
 from textual.widgets import (
     Button,
     DataTable,
@@ -33,6 +35,7 @@ logger = logging.getLogger("onelake_tui.detail")
 NodeData = FolderNode | FileNode | TableNode | None
 
 _MAX_PREVIEW_BYTES = 512 * 1024  # 512KB text preview limit
+_MAX_BINARY_BYTES = 50 * 1024 * 1024  # 50MB binary preview limit
 
 _SYNTAX_LEXERS = {
     ".py": "python",
@@ -118,6 +121,8 @@ class DetailPanel(VerticalScroll):
 
     def _apply_pending_node(self) -> None:
         """Apply the debounced node update."""
+        if not self.is_mounted:
+            return
         data = self._pending_node
         if data is None:
             self._show_placeholder()
@@ -203,10 +208,12 @@ class DetailPanel(VerticalScroll):
             info = await self.client.delta.get_metadata(
                 data.workspace, data.item_path, data.table_name
             )
+            if self._current_table_data is not data:
+                return
             self._current_delta_info = info
 
             # Remove loading spinner
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(NoMatches):
                 self.query_one("#table-spinner").remove()
 
             # Build tabbed interface
@@ -296,7 +303,7 @@ class DetailPanel(VerticalScroll):
                 )
 
         except Exception as e:
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(NoMatches):
                 self.query_one("#table-spinner").remove()
             err_msg = str(e)
             if "No files in log" in err_msg or "log segment" in err_msg:
@@ -326,9 +333,10 @@ class DetailPanel(VerticalScroll):
                 )
             logger.debug("Table metadata unavailable for %s: %s", data.table_name, e)
 
-    @work(group="detail_aux")
+    @work(group="detail_aux", exclusive=True)
     async def _load_transaction_log(self, data: TableNode) -> None:
         """Read _delta_log/*.json commit files and display as summary table."""
+        table_data = self._current_table_data
         try:
             log_dir = f"{data.item_path}/Tables/{data.table_name}/_delta_log"
             paths = await self.client.dfs.list_paths(data.workspace, log_dir)
@@ -367,8 +375,11 @@ class DetailPanel(VerticalScroll):
                     except json.JSONDecodeError:
                         continue
 
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(NoMatches):
                 self.query_one("#txn-loading").remove()
+
+            if self._current_table_data is not table_data:
+                return
 
             txn_pane = self.query_one("#tab-history", TabPane)
             if commits:
@@ -393,7 +404,7 @@ class DetailPanel(VerticalScroll):
             else:
                 await txn_pane.mount(Static("[dim]No transaction history found[/dim]"))
         except Exception as e:
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(NoMatches):
                 self.query_one("#txn-loading").remove()
             try:
                 txn_pane = self.query_one("#tab-history", TabPane)
@@ -411,14 +422,14 @@ class DetailPanel(VerticalScroll):
         elif event.button.id == "load-cdf-preview":
             self._load_cdf_preview()
 
-    @work(group="detail_aux")
+    @work(group="detail_aux", exclusive=True)
     async def _load_data_preview(self) -> None:
         """Fetch first 100 rows from the Delta table's parquet files."""
-        data = self._current_table_data
-        if data is None:
+        table_data = self._current_table_data
+        if table_data is None:
             return
 
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(NoMatches):
             self.query_one("#load-data-preview", Button).remove()
 
         data_pane = self.query_one("#tab-data", TabPane)
@@ -430,8 +441,10 @@ class DetailPanel(VerticalScroll):
 
         try:
             sample = await self.client.delta.read_sample(
-                data.workspace, data.item_path, data.table_name
+                table_data.workspace, table_data.item_path, table_data.table_name
             )
+            if self._current_table_data is not table_data:
+                return
             await self._render_data_table(data_pane, sample)
         except Exception as e:
             err_msg = str(e)
@@ -440,7 +453,7 @@ class DetailPanel(VerticalScroll):
                 logger.debug(
                     "Delta reader unsupported features, falling back to DFS parquet: %s", e
                 )
-                with contextlib.suppress(Exception):
+                with contextlib.suppress(NoMatches):
                     self.query_one("#data-loading").remove()
                 await data_pane.mount(
                     Static(
@@ -452,7 +465,7 @@ class DetailPanel(VerticalScroll):
                     )
                 )
                 try:
-                    sample = await self._read_parquet_fallback(data)
+                    sample = await self._read_parquet_fallback(table_data)
                     await self._render_data_table(data_pane, sample)
                 except Exception as fallback_err:
                     await data_pane.mount(
@@ -463,7 +476,7 @@ class DetailPanel(VerticalScroll):
                     )
                     logger.debug("Parquet fallback failed: %s", fallback_err)
             else:
-                with contextlib.suppress(Exception):
+                with contextlib.suppress(NoMatches):
                     self.query_one("#data-loading").remove()
                 await data_pane.mount(
                     Static(f"❌ Data preview failed: {esc(err_msg)}", classes="detail-section")
@@ -472,7 +485,7 @@ class DetailPanel(VerticalScroll):
 
     async def _render_data_table(self, pane: TabPane, sample) -> None:
         """Render a pyarrow.Table sample into a DataTable widget."""
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(NoMatches):
             self.query_one("#data-loading").remove()
 
         if sample.num_rows == 0:
@@ -512,15 +525,15 @@ class DetailPanel(VerticalScroll):
         pf = pq.ParquetFile(io.BytesIO(raw))
         return pf.read_row_groups([0]).slice(0, 100)
 
-    @work(group="detail_aux")
+    @work(group="detail_aux", exclusive=True)
     async def _load_cdf_preview(self) -> None:
         """Load Change Data Feed records from the Delta table."""
-        data = self._current_table_data
-        info = self._current_delta_info
-        if data is None or info is None:
+        table_data = self._current_table_data
+        delta_info = self._current_delta_info
+        if table_data is None or delta_info is None:
             return
 
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(NoMatches):
             self.query_one("#load-cdf-preview", Button).remove()
 
         cdf_pane = self.query_one("#tab-cdf", TabPane)
@@ -532,15 +545,18 @@ class DetailPanel(VerticalScroll):
         )
 
         try:
-            starting = max(0, info.version - 10)
+            starting = max(0, delta_info.version - 10)
             cdf_table = await self.client.delta.read_cdf(
-                data.workspace,
-                data.item_path,
-                data.table_name,
+                table_data.workspace,
+                table_data.item_path,
+                table_data.table_name,
                 starting_version=starting,
             )
 
-            with contextlib.suppress(Exception):
+            if self._current_table_data is not table_data:
+                return
+
+            with contextlib.suppress(NoMatches):
                 self.query_one("#cdf-loading").remove()
 
             if cdf_table.num_rows == 0:
@@ -550,7 +566,7 @@ class DetailPanel(VerticalScroll):
             await cdf_pane.mount(
                 Static(
                     f"[dim]Showing {min(cdf_table.num_rows, 100)} of {cdf_table.num_rows} "
-                    f"CDF records (versions {starting}–{info.version})[/dim]",
+                    f"CDF records (versions {starting}–{delta_info.version})[/dim]",
                     classes="detail-section",
                 )
             )
@@ -562,7 +578,7 @@ class DetailPanel(VerticalScroll):
                 row = [str(cdf_table.column(c)[row_idx]) for c in range(len(col_names))]
                 tbl.add_row(*row)
         except Exception as e:
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(NoMatches):
                 self.query_one("#cdf-loading").remove()
             await cdf_pane.mount(
                 Static(f"❌ CDF preview failed: {esc(str(e))}", classes="detail-section")
@@ -589,22 +605,23 @@ class DetailPanel(VerticalScroll):
         self.mount(Static("Loading preview…", id="preview-loading", classes="detail-section"))
 
         try:
+            is_binary = ext in (".parquet", ".avro")
+            size_limit = _MAX_BINARY_BYTES if is_binary else _MAX_PREVIEW_BYTES
+            if data.size > size_limit:
+                self._remove_loading()
+                self.mount(
+                    Static(
+                        f"⚠️ File too large to preview "
+                        f"({_format_size(data.size)}; limit {_format_size(size_limit)}).",
+                        classes="detail-section",
+                    )
+                )
+                return
+
             if ext == ".parquet":
                 await self._preview_parquet(data)
             elif ext == ".avro":
                 await self._preview_avro(data)
-            elif data.size > _MAX_PREVIEW_BYTES:
-                raw = await self.client.dfs.read_file(data.workspace, data.path)
-                text = raw[:_MAX_PREVIEW_BYTES].decode("utf-8", errors="replace")
-                self._remove_loading()
-                self.mount(
-                    Static(
-                        f"[dim]Showing first {_format_size(_MAX_PREVIEW_BYTES)} "
-                        f"of {_format_size(data.size)}[/dim]",
-                        classes="detail-section",
-                    )
-                )
-                self._render_text(file_name, ext, text)
             else:
                 raw = await self.client.dfs.read_file(data.workspace, data.path)
                 text = raw.decode("utf-8", errors="replace")
@@ -617,7 +634,7 @@ class DetailPanel(VerticalScroll):
 
     def _remove_loading(self) -> None:
         """Remove the loading placeholder if present."""
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(NoMatches):
             self.query_one("#preview-loading", Static).remove()
 
     def _render_text(self, file_name: str, ext: str, text: str) -> None:
@@ -662,7 +679,7 @@ class DetailPanel(VerticalScroll):
         """Parse CSV and render as a DataTable."""
         try:
             reader = csv.reader(io.StringIO(text))
-            rows = list(reader)
+            rows = list(itertools.islice(reader, 102))
             if not rows:
                 self.mount(Static("(empty CSV)", classes="detail-section"))
                 return
@@ -676,7 +693,7 @@ class DetailPanel(VerticalScroll):
                 padded = row + [""] * (len(headers) - len(row))
                 table.add_row(*padded[: len(headers)])
             if len(rows) > 101:
-                msg = f"[dim]Showing 100 of {len(rows) - 1} rows[/dim]"
+                msg = "[dim]Showing first 100 rows[/dim]"
                 self.mount(Static(msg, classes="detail-section"))
         except Exception as e:
             self.mount(Static(f"❌ CSV parse error: {esc(str(e))}", classes="detail-section"))

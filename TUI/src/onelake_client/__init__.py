@@ -11,6 +11,7 @@ from onelake_client.environment import (
 from onelake_client.exceptions import (
     ApiError,
     AuthenticationError,
+    FileTooLargeError,
     NotFoundError,
     OneLakeError,
     PermissionDeniedError,
@@ -60,6 +61,7 @@ __all__ = [
     # Exceptions
     "OneLakeError",
     "AuthenticationError",
+    "FileTooLargeError",
     "NotFoundError",
     "PermissionDeniedError",
     "RateLimitError",

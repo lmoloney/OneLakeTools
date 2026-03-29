@@ -34,7 +34,7 @@ class IcebergTableReader:
         """Build a pyiceberg REST catalog pointing at OneLake (sync)."""
         from pyiceberg.catalog import load_catalog
 
-        token = self._auth.get_token(self._auth._env.storage_scope)
+        token = self._auth.get_token(self._auth.env.storage_scope)
         warehouse = f"{workspace_id}/{item_id}"
 
         return load_catalog(

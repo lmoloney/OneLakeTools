@@ -25,6 +25,8 @@ from onelake_tui.status_bar import StatusBar
 from onelake_tui.tree import OneLakeTree
 from onelake_tui.workspace_picker import WorkspacePicker
 
+logger = logging.getLogger(__name__)
+
 _LOG_DIR = Path.home() / ".onelake-tui"
 _LOG_FILE = _LOG_DIR / "debug.log"
 
@@ -300,7 +302,11 @@ class OneLakeApp(App):
 
     async def on_unmount(self) -> None:
         """Clean up the client on exit."""
-        await self.client.close()
+        if self.client is not None:
+            try:
+                await self.client.close()
+            except Exception:
+                logger.exception("Error closing client during unmount")
 
 
 def run() -> None:
