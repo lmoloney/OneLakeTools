@@ -169,9 +169,7 @@ class DfsClient:
 
         return paths
 
-    async def read_file(
-        self, workspace: str, path: str, *, max_bytes: int | None = None
-    ) -> bytes:
+    async def read_file(self, workspace: str, path: str, *, max_bytes: int | None = None) -> bytes:
         """Read an entire file from OneLake.
 
         Args:

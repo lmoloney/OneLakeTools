@@ -441,9 +441,7 @@ class TestPaginateDfs:
         async with httpx.AsyncClient() as client:
             items = [
                 item
-                async for item in paginate_dfs(
-                    client, TEST_URL, headers=AUTH_HEADERS, max_items=2
-                )
+                async for item in paginate_dfs(client, TEST_URL, headers=AUTH_HEADERS, max_items=2)
             ]
         assert len(items) == 2
         assert items == [{"name": "a"}, {"name": "b"}]
@@ -461,9 +459,7 @@ class TestPaginateDfs:
         async with httpx.AsyncClient() as client:
             items = [
                 item
-                async for item in paginate_dfs(
-                    client, TEST_URL, headers=AUTH_HEADERS, max_items=2
-                )
+                async for item in paginate_dfs(client, TEST_URL, headers=AUTH_HEADERS, max_items=2)
             ]
         assert len(items) == 2
 

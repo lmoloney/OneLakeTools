@@ -325,9 +325,12 @@ class TestIcebergErrors:
     @pytest.mark.asyncio()
     async def test_catalog_build_failure_propagates(self, auth):
         reader = IcebergTableReader(auth)
-        with patch.object(
-            reader, "_build_catalog_sync", side_effect=RuntimeError("catalog connect failed")
-        ), pytest.raises(RuntimeError, match="catalog connect failed"):
+        with (
+            patch.object(
+                reader, "_build_catalog_sync", side_effect=RuntimeError("catalog connect failed")
+            ),
+            pytest.raises(RuntimeError, match="catalog connect failed"),
+        ):
             await reader.list_namespaces("ws", "item")
 
     @pytest.mark.asyncio()
@@ -340,7 +343,7 @@ class TestIcebergErrors:
             patch.object(reader, "_build_catalog_sync", return_value=catalog),
             pytest.raises(Exception, match="table not found"),
         ):
-                await reader.get_metadata("ws", "item", "dbo", "missing")
+            await reader.get_metadata("ws", "item", "dbo", "missing")
 
     @pytest.mark.asyncio()
     async def test_list_tables_failure_propagates(self, auth):
@@ -352,4 +355,4 @@ class TestIcebergErrors:
             patch.object(reader, "_build_catalog_sync", return_value=catalog),
             pytest.raises(PermissionError, match="403 Forbidden"),
         ):
-                await reader.list_tables("ws", "item", "dbo")
+            await reader.list_tables("ws", "item", "dbo")
