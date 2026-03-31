@@ -110,7 +110,7 @@ class DetailPanel(VerticalScroll):
         self._item_name = item_name
 
     def compose(self) -> ComposeResult:
-        yield OneLakeSprite(animate=True, id="detail-content")
+        yield OneLakeSprite(id="detail-content")
 
     def update_for_node(self, data: NodeData) -> None:
         """Update the panel — debounced to avoid API spam on rapid arrow keys."""
@@ -142,7 +142,7 @@ class DetailPanel(VerticalScroll):
 
     def _show_placeholder(self) -> None:
         self._clear()
-        self.mount(Static(get_welcome(), markup=True))
+        self.mount(Static(get_welcome()))
 
     def _show_folder(self, data: FolderNode) -> None:
         self._clear()

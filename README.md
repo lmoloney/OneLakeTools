@@ -10,7 +10,7 @@ An unofficial terminal UI for browsing Fabric workspaces, lakehouses, and Delta 
 
 **Features:**
 - Three-panel layout: workspace picker → item list → DFS tree + preview
-- Animated OneLake-inspired splash art with Fabric-styled shimmer
+- Animated OneLake splash art (chafa ASCII logo + figlet `ansi_shadow` wordmark with shimmer)
 - Live `/` search filtering workspaces
 - Rich file preview: Markdown, JSON (NDJSON), CSV, Parquet (pyarrow), Avro (fastavro), syntax-highlighted code
 - Selectable/copyable preview text

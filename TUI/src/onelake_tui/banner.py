@@ -7,6 +7,6 @@ for backward compatibility.
 from onelake_tui.sprite import get_welcome
 
 
-def get_banner() -> str:
-    """Return the Rich-markup banner for the detail panel."""
+def get_banner():
+    """Return the Rich-renderable banner for the detail panel."""
     return get_welcome()
