@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from rich.markup import escape
 from textual.reactive import reactive
 from textual.widgets import Static
 
@@ -20,7 +21,7 @@ class StatusBar(Static):
         path_display = self.path
         if len(path_display) > 80:
             path_display = "…" + path_display[-(79):]
-        line1_parts = [f"📍 {path_display}"]
+        line1_parts = [f"📍 {escape(path_display)}"]
         if self.item_count > 0:
             line1_parts.append(f"{self.item_count} items")
         line1 = "  │  ".join(line1_parts)
@@ -32,9 +33,10 @@ class StatusBar(Static):
         )
 
         # Line 3: auth + identity + environment
-        env_tag = f"[{self.env_name}]" if self.env_name != "PROD" else "PROD"
-        identity_part = f" ({self.identity})" if self.identity else ""
-        line3 = f"🔑 {self.auth_method}{identity_part}  │  {env_tag}  │  [?] Help"
+        # Escape brackets — Rich interprets [MSIT] as a markup tag
+        env_tag = escape(f"[{self.env_name}]") if self.env_name != "PROD" else "PROD"
+        identity_part = f" ({escape(self.identity)})" if self.identity else ""
+        line3 = f"🔑 {self.auth_method}{identity_part}  │  {env_tag}  │  \\[?] Help"
 
         return f"{line1}\n{line2}\n{line3}"
 

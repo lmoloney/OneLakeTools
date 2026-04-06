@@ -23,6 +23,7 @@ def _make_mock_client() -> MagicMock:
     client.fabric.list_workspaces = AsyncMock(return_value=[])
     client.fabric.list_items = AsyncMock(return_value=[])
     client.dfs.list_paths = AsyncMock(return_value=[])
+    client.auth.get_identity = MagicMock(return_value="test-user@contoso.com")
     client.close = AsyncMock()
     return client
 

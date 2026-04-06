@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import subprocess
 from pathlib import Path
@@ -15,7 +16,6 @@ from textual.widgets import Header, Input, Tree
 
 from onelake_client import OneLakeClient, create_credential, get_environment
 from onelake_client.environment import DEFAULT_ENVIRONMENT, ENVIRONMENTS, FabricEnvironment
-from onelake_client.exceptions import AuthenticationError
 from onelake_tui.detail import DetailPanel
 from onelake_tui.item_list import ItemList
 from onelake_tui.nodes import (
@@ -102,11 +102,14 @@ class OneLakeApp(App):
     async def _probe_auth(self) -> None:
         """Eagerly validate credentials before workspace loading begins."""
         try:
-            identity = self.client.auth.get_identity()
+            # Run blocking credential check in a thread to avoid freezing
+            # the event loop (DefaultAzureCredential probes IMDS, CLI, etc.)
+            identity = await asyncio.to_thread(self.client.auth.get_identity)
             status = self.query_one(StatusBar)
             status.identity = identity
             logger.info("Authenticated as %s", identity)
-        except AuthenticationError as exc:
+        except Exception as exc:
+            logger.exception("Auth probe failed")
             self._show_auth_error(str(exc))
             return
         self.notify("Connecting to OneLake...", timeout=5)
