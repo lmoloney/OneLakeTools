@@ -33,8 +33,9 @@ class StatusBar(Static):
         )
 
         # Line 3: auth + identity + environment
-        # Escape brackets — Rich interprets [MSIT] as a markup tag
-        env_tag = escape(f"[{self.env_name}]") if self.env_name != "PROD" else "PROD"
+        # Rich's escape() only handles [lowercase…] tags — uppercase like
+        # [MSIT] slips through and gets swallowed.  Use manual \[ escaping.
+        env_tag = f"\\[{self.env_name}]" if self.env_name != "PROD" else "PROD"
         identity_part = f" ({escape(self.identity)})" if self.identity else ""
         line3 = f"🔑 {self.auth_method}{identity_part}  │  {env_tag}  │  \\[?] Help"
 
