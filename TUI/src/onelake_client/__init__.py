@@ -1,6 +1,6 @@
 """onelake-client — Async Python client for Microsoft Fabric OneLake."""
 
-from onelake_client.auth import OneLakeAuth
+from onelake_client.auth import OneLakeAuth, create_credential
 from onelake_client.dfs import DfsClient
 from onelake_client.environment import (
     DEFAULT_ENVIRONMENT,
@@ -47,6 +47,7 @@ __all__ = [
     "IcebergTableReader",
     # Auth
     "OneLakeAuth",
+    "create_credential",
     # Models
     "Workspace",
     "Item",

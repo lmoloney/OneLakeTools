@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import subprocess
 from pathlib import Path
 
+from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Header, Input, Tree
 
-from onelake_client import OneLakeClient, get_environment
+from onelake_client import OneLakeClient, create_credential, get_environment
 from onelake_client.environment import DEFAULT_ENVIRONMENT, ENVIRONMENTS, FabricEnvironment
 from onelake_tui.detail import DetailPanel
 from onelake_tui.item_list import ItemList
@@ -72,12 +74,12 @@ class OneLakeApp(App):
         Binding("shift+tab", "focus_previous", "Prev Panel", show=False),
     ]
 
-    def __init__(self, env: FabricEnvironment | None = None):
+    def __init__(self, env: FabricEnvironment | None = None, credential=None):
         super().__init__()
         _setup_logging()
         self._env = env or DEFAULT_ENVIRONMENT
         try:
-            self.client = OneLakeClient(env=self._env)
+            self.client = OneLakeClient(credential=credential, env=self._env)
         except Exception as e:
             self.client = None  # type: ignore[assignment]
             self._auth_error = str(e)
@@ -85,20 +87,45 @@ class OneLakeApp(App):
             self._auth_error = None
 
     def on_mount(self) -> None:
-        """Welcome notification with auth hint."""
+        """Welcome notification with eager auth check."""
         self.query_one("#search-input", Input).display = False
         # Show environment ring in subtitle and status bar
         ring = f"  [{self._env.name}]" if self._env.name != "PROD" else ""
         self.sub_title = f"{self.SUB_TITLE}{ring}"
         self.query_one(StatusBar).env_name = self._env.name
         if self._auth_error:
-            self.notify(
-                f"Auth failed: {self._auth_error}\nRun 'az login' and restart.",
-                severity="error",
-                timeout=20,
-            )
+            self._show_auth_error(self._auth_error)
         else:
-            self.notify("Connecting to OneLake... (ensure 'az login' is done)", timeout=5)
+            self._probe_auth()
+
+    @work(exclusive=True, group="auth_probe")
+    async def _probe_auth(self) -> None:
+        """Eagerly validate credentials before workspace loading begins."""
+        try:
+            # Run blocking credential check in a thread to avoid freezing
+            # the event loop (DefaultAzureCredential probes IMDS, CLI, etc.)
+            identity = await asyncio.to_thread(self.client.auth.get_identity)
+            status = self.query_one(StatusBar)
+            status.identity = identity
+            logger.info("Authenticated as %s", identity)
+        except Exception as exc:
+            logger.exception("Auth probe failed")
+            self._show_auth_error(str(exc))
+            return
+        self.notify("Connecting to OneLake...", timeout=5)
+
+    def _show_auth_error(self, error: str) -> None:
+        """Display a prominent auth error panel."""
+        # Truncate long Azure SDK errors to the useful part
+        msg = str(error)
+        if len(msg) > 200:
+            msg = msg[:200] + "…"
+        self.notify(
+            f"Auth failed: {msg}\nRun 'az login' and restart.",
+            severity="error",
+            timeout=30,
+        )
+        logger.error("Auth probe failed: %s", error)
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -321,10 +348,20 @@ def run() -> None:
         default="prod",
         help="Fabric environment ring (default: prod)",
     )
+    parser.add_argument(
+        "--credential",
+        choices=["default", "managed", "cli", "env"],
+        default="default",
+        help="Credential type: default (DefaultAzureCredential), "
+        "managed (ManagedIdentityCredential), "
+        "cli (AzureCliCredential), "
+        "env (EnvironmentCredential)",
+    )
     args = parser.parse_args()
 
     env = get_environment(args.env)
-    app = OneLakeApp(env=env)
+    credential = create_credential(args.credential)
+    app = OneLakeApp(env=env, credential=credential)
     app.run()
 
 

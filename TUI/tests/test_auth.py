@@ -1,9 +1,22 @@
 """Tests for OneLakeAuth."""
 
-from onelake_client.auth import OneLakeAuth
+import base64
+import json
+from unittest.mock import MagicMock
+
+import pytest
+
+from onelake_client.auth import OneLakeAuth, _decode_jwt_claims, create_credential
 from onelake_client.environment import PROD
 
 from .conftest import FakeCredential
+
+
+def _make_jwt(claims: dict) -> str:
+    """Build a fake JWT with the given payload claims (no signature)."""
+    header = base64.urlsafe_b64encode(b'{"alg":"none"}').rstrip(b"=").decode()
+    payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).rstrip(b"=").decode()
+    return f"{header}.{payload}.sig"
 
 
 def test_get_token_returns_string():
@@ -48,3 +61,105 @@ def test_different_scopes_get_separate_tokens():
     auth.get_token(PROD.storage_scope)
     assert PROD.fabric_scope in auth._token_cache
     assert PROD.storage_scope in auth._token_cache
+
+
+# ── invalidate_token tests ──────────────────────────────────────────────
+
+
+def test_invalidate_token_clears_specific_scope():
+    auth = OneLakeAuth(credential=FakeCredential())
+    auth.get_token(PROD.fabric_scope)
+    auth.get_token(PROD.storage_scope)
+    assert len(auth._token_cache) == 2
+
+    auth.invalidate_token(PROD.fabric_scope)
+    assert PROD.fabric_scope not in auth._token_cache
+    assert PROD.storage_scope in auth._token_cache
+
+
+def test_invalidate_token_clears_all():
+    auth = OneLakeAuth(credential=FakeCredential())
+    auth.get_token(PROD.fabric_scope)
+    auth.get_token(PROD.storage_scope)
+    auth.invalidate_token()
+    assert len(auth._token_cache) == 0
+
+
+def test_invalidate_token_nonexistent_scope_is_noop():
+    auth = OneLakeAuth(credential=FakeCredential())
+    auth.invalidate_token("nonexistent-scope")  # should not raise
+
+
+# ── get_identity tests ──────────────────────────────────────────────────
+
+
+class JwtCredential:
+    """Credential that returns a JWT with configurable claims."""
+
+    def __init__(self, claims: dict):
+        self._token = _make_jwt(claims)
+
+    def get_token(self, *scopes, **kwargs):
+        return MagicMock(token=self._token, expires_on=9999999999.0)
+
+
+def test_get_identity_preferred_username():
+    cred = JwtCredential({"preferred_username": "luke@contoso.com", "oid": "abc"})
+    auth = OneLakeAuth(credential=cred)
+    assert auth.get_identity() == "luke@contoso.com"
+
+
+def test_get_identity_upn_fallback():
+    cred = JwtCredential({"upn": "luke@fabric.com"})
+    auth = OneLakeAuth(credential=cred)
+    assert auth.get_identity() == "luke@fabric.com"
+
+
+def test_get_identity_name_fallback():
+    cred = JwtCredential({"name": "Luke Moloney"})
+    auth = OneLakeAuth(credential=cred)
+    assert auth.get_identity() == "Luke Moloney"
+
+
+def test_get_identity_oid_fallback():
+    cred = JwtCredential({"oid": "guid-1234"})
+    auth = OneLakeAuth(credential=cred)
+    assert auth.get_identity() == "guid-1234"
+
+
+def test_get_identity_unknown_when_no_claims():
+    auth = OneLakeAuth(credential=FakeCredential())
+    # FakeCredential returns "fake-token-12345" which is not a valid JWT
+    assert auth.get_identity() == "unknown"
+
+
+def test_get_identity_caches_result():
+    cred = JwtCredential({"preferred_username": "cached@test.com"})
+    auth = OneLakeAuth(credential=cred)
+    result1 = auth.get_identity()
+    result2 = auth.get_identity()
+    assert result1 == result2 == "cached@test.com"
+
+
+# ── _decode_jwt_claims tests ────────────────────────────────────────────
+
+
+def test_decode_jwt_claims_valid():
+    claims = {"sub": "user1", "oid": "abc"}
+    token = _make_jwt(claims)
+    decoded = _decode_jwt_claims(token)
+    assert decoded["sub"] == "user1"
+    assert decoded["oid"] == "abc"
+
+
+def test_decode_jwt_claims_invalid_token():
+    assert _decode_jwt_claims("not-a-jwt") == {}
+    assert _decode_jwt_claims("") == {}
+
+
+# ── create_credential tests ─────────────────────────────────────────────
+
+
+def test_create_credential_unknown_kind():
+    with pytest.raises(ValueError, match="Unknown credential kind"):
+        create_credential("bogus")
