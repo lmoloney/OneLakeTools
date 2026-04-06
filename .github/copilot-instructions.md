@@ -113,6 +113,29 @@ TUI/src/
 - Integration tests in `tests/integration/` require `az login` and real Fabric access
 - Marker `@pytest.mark.integration` for integration tests
 
+## How to Add Things
+
+### Adding a new file format preview
+
+1. In `onelake_tui/detail.py`, add an `elif` branch in `_load_preview()` matching the file extension.
+2. Read the file bytes via `self._client.dfs.read_file(ws_id, path)`.
+3. Parse/render into a string and set it on the `TextArea` widget.
+4. Add a test in `tests/` that mocks the HTTP response and verifies the preview renders.
+
+### Adding a new Fabric item type
+
+1. Add the item type constant to `onelake_client/models/fabric.py` if not already present.
+2. If the item type needs special DFS handling (e.g. different root folders), update `onelake_tui/tree.py` → `load_item()`.
+3. Update `onelake_tui/nodes.py` if a new node dataclass is needed.
+4. Add integration test coverage in `tests/integration/`.
+
+### Adding a new environment / ring
+
+1. Add a new `FabricEnvironment` instance in `onelake_client/environment.py` with the correct API and DFS hostnames.
+2. Register it in the `ENVIRONMENTS` dict in the same file.
+3. Add the `--env` choice to the CLI arg parser in `onelake_tui/app.py`.
+4. Token scopes do NOT change per ring — only hostnames differ (see [ADR-003](../docs/decisions/003-shared-token-scopes.md)).
+
 ## Decision Records
 
 Architecture decisions live in [`docs/decisions/`](../docs/decisions/). Lightweight ADR format with YAML front matter (id, title, status, date, tags). When making architectural decisions, create a new record numbered sequentially.
