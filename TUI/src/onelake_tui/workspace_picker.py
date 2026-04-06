@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from textual import on, work
 from textual.app import ComposeResult
@@ -15,6 +16,8 @@ from onelake_client import OneLakeClient
 from onelake_client.models import Workspace
 
 logger = logging.getLogger("onelake_tui.workspace_picker")
+
+_CACHE_TTL = 300  # 5 minutes
 
 
 class WorkspacePicker(Vertical):
@@ -44,6 +47,7 @@ class WorkspacePicker(Vertical):
         self.client = client
         self._workspaces: list[Workspace] = []
         self._filtered: list[Workspace] = []
+        self._cache_fetched_at: float = 0.0
 
     def compose(self) -> ComposeResult:
         yield OptionList(id="workspace-list")
@@ -52,15 +56,26 @@ class WorkspacePicker(Vertical):
         self.load_workspaces()
 
     @work(exclusive=True, group="load_workspaces")
-    async def load_workspaces(self) -> None:
+    async def load_workspaces(self, *, force: bool = False) -> None:
         """Fetch workspaces and populate the option list."""
         option_list = self.query_one("#workspace-list", OptionList)
+
+        # Use cached data if still fresh
+        if (
+            not force
+            and self._workspaces
+            and (time.monotonic() - self._cache_fetched_at) < _CACHE_TTL
+        ):
+            logger.debug("Using cached workspaces (%d items)", len(self._workspaces))
+            return
+
         option_list.clear_options()
         try:
             self.app.notify("Fetching workspaces...", timeout=3)
             workspaces = await self.client.fabric.list_workspaces()
             self._workspaces = sorted(workspaces, key=lambda w: w.display_name.casefold())
             self._filtered = list(self._workspaces)
+            self._cache_fetched_at = time.monotonic()
             self._rebuild_options()
             self.app.notify(f"Loaded {len(self._workspaces)} workspaces", timeout=3)
             logger.info("Loaded %d workspaces", len(self._workspaces))
@@ -114,7 +129,8 @@ class WorkspacePicker(Vertical):
         return None
 
     def refresh_workspaces(self) -> None:
-        """Reload workspaces from scratch."""
+        """Reload workspaces from scratch (bypasses cache)."""
         self._workspaces.clear()
         self._filtered.clear()
-        self.load_workspaces()
+        self._cache_fetched_at = 0.0
+        self.load_workspaces(force=True)

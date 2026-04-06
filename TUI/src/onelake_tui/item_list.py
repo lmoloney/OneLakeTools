@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from textual import on, work
 from textual.app import ComposeResult
@@ -15,6 +16,8 @@ from onelake_client import OneLakeClient
 from onelake_client.models import Item
 
 logger = logging.getLogger("onelake_tui.item_list")
+
+_CACHE_TTL = 300  # 5 minutes
 
 _ITEM_ICONS = {
     "Lakehouse": "🏠",
@@ -87,13 +90,16 @@ class ItemList(Vertical):
         self._items: list[Item] = []
         self._workspace_id: str = ""
         self._workspace_name: str = ""
+        self._item_cache: dict[str, tuple[list[Item], float]] = {}  # ws_id → (items, fetched_at)
 
     def compose(self) -> ComposeResult:
         yield Label("Items", id="item-header")
         yield OptionList(id="item-option-list")
 
     @work(exclusive=True, group="load_items")
-    async def load_items(self, workspace_id: str, workspace_name: str) -> None:
+    async def load_items(
+        self, workspace_id: str, workspace_name: str, *, force: bool = False
+    ) -> None:
         """Fetch and display items for a workspace."""
         self._workspace_id = workspace_id
         self._workspace_name = workspace_name
@@ -101,23 +107,36 @@ class ItemList(Vertical):
         option_list.clear_options()
         self.query_one("#item-header", Label).update(f"📦 {workspace_name}")
 
+        # Use cached data if still fresh
+        cached = self._item_cache.get(workspace_id)
+        if not force and cached is not None:
+            items, fetched_at = cached
+            if (time.monotonic() - fetched_at) < _CACHE_TTL:
+                self._items = items
+                self._render_items()
+                logger.debug("Using cached items for %s (%d items)", workspace_name, len(items))
+                return
+
         try:
             items = await self.client.fabric.list_items(workspace_id)
             self._items = sorted(items, key=lambda i: (i.type, i.display_name.casefold()))
-            for item in self._items:
-                icon = _ITEM_ICONS.get(item.type, "📄")
-                tag = _ITEM_TAGS.get(item.type, "")
-                if tag:
-                    label = f"{icon} {tag} {item.display_name}"
-                else:
-                    label = f"{icon} {item.display_name}"
-                option_list.add_option(Option(label, id=item.id))
-
-            if not self._items:
-                option_list.add_option(Option("(empty workspace)", disabled=True))
+            self._item_cache[workspace_id] = (self._items, time.monotonic())
+            self._render_items()
         except Exception as e:
             option_list.add_option(Option(f"❌ {e}", disabled=True))
             logger.exception("Failed to load items for %s", workspace_name)
+
+    def _render_items(self) -> None:
+        """Populate the OptionList from the current items list."""
+        option_list = self.query_one("#item-option-list", OptionList)
+        option_list.clear_options()
+        for item in self._items:
+            icon = _ITEM_ICONS.get(item.type, "📄")
+            tag = _ITEM_TAGS.get(item.type, "")
+            label = f"{icon} {tag} {item.display_name}" if tag else f"{icon} {item.display_name}"
+            option_list.add_option(Option(label, id=item.id))
+        if not self._items:
+            option_list.add_option(Option("(empty workspace)", disabled=True))
 
     @on(OptionList.OptionHighlighted, "#item-option-list")
     def _on_highlighted(self, event: OptionList.OptionHighlighted) -> None:
@@ -135,7 +154,8 @@ class ItemList(Vertical):
         return None
 
     def clear_items(self) -> None:
-        """Clear the items list."""
+        """Clear the items list and cache."""
         self._items.clear()
+        self._item_cache.clear()
         self.query_one("#item-option-list", OptionList).clear_options()
         self.query_one("#item-header", Label).update("Items")

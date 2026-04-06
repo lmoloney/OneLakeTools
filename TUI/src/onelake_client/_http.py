@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 import random
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 import httpx
@@ -45,12 +45,17 @@ async def request_with_retry(
     headers: dict[str, str] | None = None,
     params: dict[str, Any] | None = None,
     max_retries: int = _MAX_RETRIES,
+    on_auth_error: Callable[[], None] | None = None,
     **kwargs: Any,
 ) -> httpx.Response:
     """Make an HTTP request with automatic retry on transient errors.
 
     Retries on 429 (rate limit) and 5xx errors with exponential backoff.
     Respects Retry-After header for 429 responses.
+
+    Args:
+        on_auth_error: Optional callback invoked on 401 before raising,
+            typically used to invalidate cached tokens.
     """
     last_exc: Exception | None = None
     backoff = _INITIAL_BACKOFF
@@ -60,7 +65,7 @@ async def request_with_retry(
             response = await client.request(method, url, headers=headers, params=params, **kwargs)
 
             if response.status_code not in _RETRY_STATUSES:
-                raise_for_status(response)
+                raise_for_status(response, on_auth_error)
                 return response
 
             # Retryable status — back off and try again
@@ -81,7 +86,7 @@ async def request_with_retry(
                 continue
 
             # Last attempt — raise the error
-            raise_for_status(response)
+            raise_for_status(response, on_auth_error)
             return response  # unreachable but keeps type checker happy
 
         except httpx.TransportError as exc:
@@ -106,7 +111,10 @@ async def request_with_retry(
     raise ApiError(0, message=f"Request failed after {max_retries + 1} attempts") from last_exc
 
 
-def raise_for_status(response: httpx.Response) -> None:
+def raise_for_status(
+    response: httpx.Response,
+    on_auth_error: Callable[[], None] | None = None,
+) -> None:
     """Map HTTP error responses to typed exceptions."""
     status = response.status_code
 
@@ -116,6 +124,8 @@ def raise_for_status(response: httpx.Response) -> None:
     body = response.text
 
     if status == 401:
+        if on_auth_error is not None:
+            on_auth_error()
         raise AuthenticationError(f"Authentication failed: {body}")
     if status == 403:
         raise PermissionDeniedError(f"Permission denied: {body}")
