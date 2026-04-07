@@ -2,7 +2,7 @@
 
 An unofficial terminal UI for browsing Microsoft Fabric workspaces, lakehouses, and Delta tables — built with [Textual](https://textual.textualize.io/).
 
-<!-- TODO: Add screenshot -->
+![OneLake TUI — browsing a Fabric lakehouse](../docs/branding/tui-screenshot.svg)
 
 ## Features
 

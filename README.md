@@ -2,6 +2,8 @@
 
 Unofficial developer tools for [Microsoft Fabric](https://learn.microsoft.com/en-us/fabric/) OneLake.
 
+![OneLake TUI](docs/branding/tui-screenshot.svg)
+
 ## Tools
 
 ### 🖥️ OneLake TUI (Unofficial) ([`TUI/`](TUI/))

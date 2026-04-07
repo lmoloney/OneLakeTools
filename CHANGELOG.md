@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.0b1] - 2026-04-07
+
+### Added
+
+- `pip install onelake-tools` — PyPI packaging with full project metadata (classifiers, URLs, keywords)
+- `--version` CLI flag (`onelake-tui --version`)
+- PEP 561 `py.typed` markers for type-checker compatibility
+- PyPI publish workflow via GitHub Actions (OIDC trusted publishers)
+- TUI screenshot in README documentation
+
 ## [0.1.0] - 2026-04-06
 
 ### Added

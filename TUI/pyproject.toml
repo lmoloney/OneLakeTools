@@ -1,10 +1,24 @@
 [project]
 name = "onelake-tools"
-version = "0.1.0"
+version = "0.2.0b1"
 description = "Unofficial TUI and client library for Microsoft Fabric OneLake"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
+authors = [{name = "Luke Moloney"}]
+keywords = ["onelake", "fabric", "microsoft", "tui", "lakehouse", "delta-lake", "textual"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Topic :: Utilities",
+]
 dependencies = [
     "httpx>=0.27",
     "pydantic>=2.0",
@@ -18,6 +32,12 @@ dependencies = [
 
 [project.scripts]
 onelake-tui = "onelake_tui.app:run"
+
+[project.urls]
+Homepage = "https://github.com/lmoloney/OneLakeTools"
+Repository = "https://github.com/lmoloney/OneLakeTools"
+Issues = "https://github.com/lmoloney/OneLakeTools/issues"
+Changelog = "https://github.com/lmoloney/OneLakeTools/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [
