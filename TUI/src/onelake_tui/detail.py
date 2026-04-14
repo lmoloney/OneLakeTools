@@ -205,6 +205,24 @@ class DetailPanel(VerticalScroll):
                 data.item_path,
                 data.table_name,
             )
+            # Guard: verify _delta_log exists before calling deltalake.
+            # Schema folders (e.g. Tables/dbo) don't have _delta_log and
+            # the Rust FFI can panic instead of raising a Python exception.
+            delta_log_path = f"{data.item_path}/Tables/{data.table_name}/_delta_log"
+            has_delta = await self.client.dfs.exists(data.workspace, delta_log_path)
+            if self._current_table_data is not data:
+                return
+            if not has_delta:
+                with contextlib.suppress(NoMatches):
+                    self.query_one("#table-spinner").remove()
+                self.mount(
+                    Static(
+                        "[dim]Not a Delta table — this may be a schema folder. "
+                        "Expand the node in the tree to browse its tables.[/dim]",
+                        classes="detail-section",
+                    )
+                )
+                return
             info = await self.client.delta.get_metadata(
                 data.workspace, data.item_path, data.table_name
             )

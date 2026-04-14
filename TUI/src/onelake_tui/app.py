@@ -101,6 +101,7 @@ class OneLakeApp(App):
     @work(exclusive=True, group="auth_probe")
     async def _probe_auth(self) -> None:
         """Eagerly validate credentials before workspace loading begins."""
+        logger.debug("Auth probe starting")
         try:
             # Run blocking credential check in a thread to avoid freezing
             # the event loop (DefaultAzureCredential probes IMDS, CLI, etc.)
@@ -113,6 +114,20 @@ class OneLakeApp(App):
             self._show_auth_error(str(exc))
             return
         self.notify("Connecting to OneLake...", timeout=5)
+
+    @work(exclusive=True, group="identity_fallback")
+    async def _ensure_identity(self) -> None:
+        """Fallback: resolve identity if _probe_auth didn't set it."""
+        status = self.query_one(StatusBar)
+        if status.identity:
+            return
+        logger.debug("Identity fallback: resolving from cached token")
+        try:
+            identity = await asyncio.to_thread(self.client.auth.get_identity)
+            status.identity = identity
+            logger.info("Identity resolved via fallback: %s", identity)
+        except Exception:
+            logger.debug("Identity fallback failed", exc_info=True)
 
     def _show_auth_error(self, error: str) -> None:
         """Display a prominent auth error panel."""
@@ -155,6 +170,9 @@ class OneLakeApp(App):
         # Update status bar
         status = self.query_one(StatusBar)
         status.update_path(f"onelake://{ws.display_name}")
+        # Fallback: ensure identity is displayed (covers race with _probe_auth)
+        if not status.identity:
+            self._ensure_identity()
 
     def on_item_list_item_selected(self, event: ItemList.ItemSelected) -> None:
         """Load the selected item's DFS tree."""
