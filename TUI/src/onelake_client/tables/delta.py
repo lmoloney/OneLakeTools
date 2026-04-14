@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import multiprocessing as mp
 from typing import TYPE_CHECKING
 
 from deltalake.exceptions import DeltaError
@@ -52,95 +51,104 @@ def _schema_to_columns(schema) -> list[Column]:
 # ── Subprocess workers (top-level for pickling) ────────────────────────
 
 
-def _metadata_worker(uri: str, storage_options: dict, conn: mp.connection.Connection) -> None:
-    """Load Delta metadata in an isolated process.
+_METADATA_SCRIPT = '''
+import sys, json
+from deltalake import DeltaTable
 
-    Runs in a subprocess so that Rust panics in the deltalake library
-    kill only the child process, not the TUI.
-    """
+data = json.load(sys.stdin)
+uri = data["uri"]
+storage_options = data["storage_options"]
+
+try:
+    dt = DeltaTable(uri, storage_options=storage_options)
+
+    schema = dt.schema()
+    fields = schema.fields if hasattr(schema, "fields") else schema
+    columns = [
+        {
+            "name": f.name,
+            "type": str(f.type),
+            "nullable": f.nullable,
+            "metadata": dict(f.metadata) if f.metadata else None,
+        }
+        for f in fields
+    ]
+
+    version = dt.version()
+    files = dt.file_uris()
+    meta = dt.metadata()
+
+    size_bytes = 0
     try:
-        from deltalake import DeltaTable
+        add_actions = dt.get_add_actions(flatten=True)
+        if hasattr(add_actions, "to_pydict"):
+            sd = add_actions.to_pydict()
+            size_bytes = sum(sd.get("size_bytes", sd.get("size", [])))
+        elif hasattr(add_actions, "column"):
+            cn = add_actions.column_names
+            sk = "size_bytes" if "size_bytes" in cn else "size"
+            if sk in cn:
+                size_bytes = sum(add_actions.column(sk).to_pylist())
+    except Exception:
+        pass
 
-        dt = DeltaTable(uri, storage_options=storage_options)
-
-        schema = dt.schema()
-        fields = schema.fields if hasattr(schema, "fields") else schema
-        columns = [
-            {
-                "name": f.name,
-                "type": str(f.type),
-                "nullable": f.nullable,
-                "metadata": dict(f.metadata) if f.metadata else None,
-            }
-            for f in fields
-        ]
-
-        version = dt.version()
-        files = dt.file_uris()
-        meta = dt.metadata()
-
-        size_bytes = 0
-        try:
-            add_actions = dt.get_add_actions(flatten=True)
-            if hasattr(add_actions, "to_pydict"):
-                sd = add_actions.to_pydict()
-                size_bytes = sum(sd.get("size_bytes", sd.get("size", [])))
-            elif hasattr(add_actions, "column"):
-                cn = add_actions.column_names
-                sk = "size_bytes" if "size_bytes" in cn else "size"
-                if sk in cn:
-                    size_bytes = sum(add_actions.column(sk).to_pylist())
-        except Exception:
-            pass
-
-        conn.send({
-            "ok": True,
-            "name": meta.name or "",
-            "columns": columns,
-            "version": version,
-            "num_files": len(files),
-            "size_bytes": size_bytes,
-            "partition_columns": list(meta.partition_columns),
-            "properties": dict(meta.configuration) if meta.configuration else {},
-            "description": meta.description,
-        })
-    except Exception as e:
-        conn.send({"ok": False, "error": f"{type(e).__name__}: {e}"})
-    finally:
-        conn.close()
+    json.dump({
+        "ok": True,
+        "name": meta.name or "",
+        "columns": columns,
+        "version": version,
+        "num_files": len(files),
+        "size_bytes": size_bytes,
+        "partition_columns": list(meta.partition_columns),
+        "properties": dict(meta.configuration) if meta.configuration else {},
+        "description": meta.description,
+    }, sys.stdout)
+except Exception as e:
+    json.dump({"ok": False, "error": f"{type(e).__name__}: {e}"}, sys.stdout)
+'''
 
 
-def _run_worker(
-    worker_fn, args: tuple, timeout: int = _SUBPROCESS_TIMEOUT
+def _run_delta_subprocess(
+    uri: str, storage_options: dict, timeout: int = _SUBPROCESS_TIMEOUT
 ) -> dict:
-    """Run a worker function in a subprocess with timeout.
+    """Run the Delta metadata script in a subprocess.
 
-    Returns the result dict from the worker, or raises DeltaError on
-    crash/timeout.
+    Uses subprocess.Popen instead of multiprocessing.Process to avoid
+    file-descriptor inheritance issues on macOS + Python 3.14.
+    Passes data via stdin to keep bearer tokens out of ps output.
     """
-    parent_conn, child_conn = mp.Pipe()
-    p = mp.Process(target=worker_fn, args=(*args, child_conn))
-    p.start()
-    child_conn.close()
+    import json
+    import subprocess
+    import sys
 
-    if parent_conn.poll(timeout):
-        result = parent_conn.recv()
-    else:
-        p.terminate()
-        p.join(timeout=5)
-        parent_conn.close()
-        raise DeltaError(f"Delta table load timed out after {timeout}s")
+    input_data = json.dumps({"uri": uri, "storage_options": storage_options})
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", _METADATA_SCRIPT],
+            input=input_data,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise DeltaError(f"Delta table load timed out after {timeout}s") from exc
 
-    p.join(timeout=5)
-    parent_conn.close()
-
-    if p.exitcode and p.exitcode != 0:
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        # Truncate long Rust panic output
+        if len(stderr) > 300:
+            stderr = stderr[:300] + "…"
         raise DeltaError(
-            f"Delta reader process crashed (exit code {p.exitcode}). "
-            "This table may use features not supported by the local reader."
+            f"Delta reader process crashed (exit code {result.returncode}). "
+            f"{stderr or 'This table may use features not supported by the local reader.'}"
         )
 
-    return result
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise DeltaError(
+            f"Delta reader returned invalid output: {result.stdout[:200]}"
+        ) from exc
 
 
 class DeltaTableReader:
@@ -198,7 +206,7 @@ class DeltaTableReader:
         """Load metadata in an isolated subprocess (Rust-panic safe)."""
         storage_options = self._get_storage_options()
         result = await asyncio.to_thread(
-            _run_worker, _metadata_worker, (uri, storage_options)
+            _run_delta_subprocess, uri, storage_options
         )
 
         if not result.get("ok"):
