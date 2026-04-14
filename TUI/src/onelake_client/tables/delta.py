@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import multiprocessing as mp
 from typing import TYPE_CHECKING
 
 from deltalake.exceptions import DeltaError
@@ -12,6 +13,8 @@ if TYPE_CHECKING:
     from onelake_client.auth import OneLakeAuth
 
 logger = logging.getLogger("onelake_client.tables.delta")
+
+_SUBPROCESS_TIMEOUT = 30  # seconds
 
 
 def _build_table_uri(workspace: str, item_path: str, table_name: str, dfs_host: str) -> str:
@@ -46,11 +49,109 @@ def _schema_to_columns(schema) -> list[Column]:
     return columns
 
 
+# ── Subprocess workers (top-level for pickling) ────────────────────────
+
+
+def _metadata_worker(uri: str, storage_options: dict, conn: mp.connection.Connection) -> None:
+    """Load Delta metadata in an isolated process.
+
+    Runs in a subprocess so that Rust panics in the deltalake library
+    kill only the child process, not the TUI.
+    """
+    try:
+        from deltalake import DeltaTable
+
+        dt = DeltaTable(uri, storage_options=storage_options)
+
+        schema = dt.schema()
+        fields = schema.fields if hasattr(schema, "fields") else schema
+        columns = [
+            {
+                "name": f.name,
+                "type": str(f.type),
+                "nullable": f.nullable,
+                "metadata": dict(f.metadata) if f.metadata else None,
+            }
+            for f in fields
+        ]
+
+        version = dt.version()
+        files = dt.file_uris()
+        meta = dt.metadata()
+
+        size_bytes = 0
+        try:
+            add_actions = dt.get_add_actions(flatten=True)
+            if hasattr(add_actions, "to_pydict"):
+                sd = add_actions.to_pydict()
+                size_bytes = sum(sd.get("size_bytes", sd.get("size", [])))
+            elif hasattr(add_actions, "column"):
+                cn = add_actions.column_names
+                sk = "size_bytes" if "size_bytes" in cn else "size"
+                if sk in cn:
+                    size_bytes = sum(add_actions.column(sk).to_pylist())
+        except Exception:
+            pass
+
+        conn.send({
+            "ok": True,
+            "name": meta.name or "",
+            "columns": columns,
+            "version": version,
+            "num_files": len(files),
+            "size_bytes": size_bytes,
+            "partition_columns": list(meta.partition_columns),
+            "properties": dict(meta.configuration) if meta.configuration else {},
+            "description": meta.description,
+        })
+    except Exception as e:
+        conn.send({"ok": False, "error": f"{type(e).__name__}: {e}"})
+    finally:
+        conn.close()
+
+
+def _run_worker(
+    worker_fn, args: tuple, timeout: int = _SUBPROCESS_TIMEOUT
+) -> dict:
+    """Run a worker function in a subprocess with timeout.
+
+    Returns the result dict from the worker, or raises DeltaError on
+    crash/timeout.
+    """
+    parent_conn, child_conn = mp.Pipe()
+    p = mp.Process(target=worker_fn, args=(*args, child_conn))
+    p.start()
+    child_conn.close()
+
+    if parent_conn.poll(timeout):
+        result = parent_conn.recv()
+    else:
+        p.terminate()
+        p.join(timeout=5)
+        parent_conn.close()
+        raise DeltaError(f"Delta table load timed out after {timeout}s")
+
+    p.join(timeout=5)
+    parent_conn.close()
+
+    if p.exitcode and p.exitcode != 0:
+        raise DeltaError(
+            f"Delta reader process crashed (exit code {p.exitcode}). "
+            "This table may use features not supported by the local reader."
+        )
+
+    return result
+
+
 class DeltaTableReader:
     """Reads Delta table metadata from OneLake.
 
     Uses the `deltalake` library (delta-rs Python bindings) with OneLake
     storage options for authentication.
+
+    The ``get_metadata`` method runs deltalake in a **subprocess** to
+    isolate the main process from Rust panics that can occur with certain
+    table features (e.g. deletion vectors, v2 checkpoints).
 
     Usage:
         auth = OneLakeAuth()
@@ -61,6 +162,7 @@ class DeltaTableReader:
     def __init__(self, auth: OneLakeAuth, dfs_host: str = "onelake.dfs.fabric.microsoft.com"):
         self._auth = auth
         self._dfs_host = dfs_host
+        self._isolate = True  # subprocess isolation for Rust panic safety
 
     def _get_storage_options(self) -> dict:
         """Get fresh storage options with a current token."""
@@ -75,6 +177,8 @@ class DeltaTableReader:
     async def get_metadata(self, workspace: str, item_path: str, table_name: str) -> DeltaTableInfo:
         """Get metadata for a Delta table.
 
+        Runs deltalake in a subprocess by default to isolate Rust panics.
+
         Args:
             workspace: Workspace name or GUID.
             item_path: Item path like "MyLakehouse.Lakehouse".
@@ -86,6 +190,33 @@ class DeltaTableReader:
         uri = _build_table_uri(workspace, item_path, table_name, self._dfs_host)
         logger.debug("Loading Delta table: %s", uri)
 
+        if self._isolate:
+            return await self._get_metadata_subprocess(uri, table_name)
+        return await self._get_metadata_inprocess(uri, table_name)
+
+    async def _get_metadata_subprocess(self, uri: str, table_name: str) -> DeltaTableInfo:
+        """Load metadata in an isolated subprocess (Rust-panic safe)."""
+        storage_options = self._get_storage_options()
+        result = await asyncio.to_thread(
+            _run_worker, _metadata_worker, (uri, storage_options)
+        )
+
+        if not result.get("ok"):
+            raise DeltaError(result.get("error", "Unknown error in Delta reader"))
+
+        return DeltaTableInfo(
+            name=result["name"] or table_name,
+            schema_=[Column(**c) for c in result["columns"]],
+            version=result["version"],
+            num_files=result["num_files"],
+            size_bytes=result["size_bytes"],
+            partition_columns=result["partition_columns"],
+            properties=result["properties"],
+            description=result["description"],
+        )
+
+    async def _get_metadata_inprocess(self, uri: str, table_name: str) -> DeltaTableInfo:
+        """Load metadata in-process (used when _isolate=False, e.g. tests)."""
         dt = await asyncio.to_thread(self._load_table_sync, uri)
 
         schema = _schema_to_columns(dt.schema())
@@ -93,16 +224,13 @@ class DeltaTableReader:
         files = dt.file_uris()
         metadata = dt.metadata()
 
-        # Sum file sizes from add actions
         size_bytes = 0
         try:
             add_actions = await asyncio.to_thread(dt.get_add_actions, flatten=True)
             if hasattr(add_actions, "to_pydict"):
-                # pyarrow Table (older deltalake)
                 size_dict = add_actions.to_pydict()
                 size_bytes = sum(size_dict.get("size_bytes", size_dict.get("size", [])))
             elif hasattr(add_actions, "column"):
-                # arro3 Table (deltalake >= 1.0)
                 col_names = add_actions.column_names
                 size_key = "size_bytes" if "size_bytes" in col_names else "size"
                 if size_key in col_names:

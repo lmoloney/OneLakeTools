@@ -189,6 +189,7 @@ class TestGetMetadata:
 
     def _patch_reader(self, reader, dt_mock):
         """Patch _load_table_sync to return our mock (avoids local-import issues)."""
+        reader._isolate = False  # use in-process path so mocks work
         return patch.object(reader, "_load_table_sync", return_value=dt_mock)
 
     @pytest.mark.asyncio()
@@ -324,6 +325,7 @@ class TestSizeComputationErrors:
         return dt
 
     def _patch_reader(self, reader, dt_mock):
+        reader._isolate = False
         return patch.object(reader, "_load_table_sync", return_value=dt_mock)
 
     @pytest.mark.asyncio()
