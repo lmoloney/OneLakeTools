@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import json
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
+from deltalake.exceptions import DeltaError
 
 from onelake_client.environment import DAILY, MSIT, PROD
 from onelake_client.models.table import DeltaTableInfo
 from onelake_client.tables.delta import (
     DeltaTableReader,
     _build_table_uri,
+    _run_delta_subprocess,
     _schema_to_columns,
 )
 
@@ -411,3 +415,85 @@ class TestStorageOptions:
         assert opts["account_name"] == "onelake"
         assert opts["azure_storage_token"] == "fake-token-12345"
         assert opts["account_host"] == "onelake.dfs.fabric.microsoft.com"
+
+
+# ── Subprocess isolation tests ──────────────────────────────────────────
+
+
+class TestRunDeltaSubprocess:
+    """Test the subprocess path for Delta metadata loading."""
+
+    def test_success(self):
+        """Successful subprocess returns parsed metadata dict."""
+        fake_output = json.dumps(
+            {
+                "ok": True,
+                "name": "test_table",
+                "columns": [{"name": "id", "type": "long", "nullable": False, "metadata": None}],
+                "version": 3,
+                "num_files": 2,
+                "size_bytes": 1000,
+                "partition_columns": [],
+                "properties": {},
+                "description": None,
+            }
+        )
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = fake_output
+        mock_result.stderr = ""
+
+        with patch("subprocess.run", return_value=mock_result):
+            result = _run_delta_subprocess("abfss://ws@host/path", {"token": "t"})
+
+        assert result["ok"] is True
+        assert result["name"] == "test_table"
+        assert result["version"] == 3
+
+    def test_nonzero_exit_raises(self):
+        """Non-zero exit code raises DeltaError."""
+        mock_result = MagicMock()
+        mock_result.returncode = -11  # SIGSEGV
+        mock_result.stdout = ""
+        mock_result.stderr = "panic: something went wrong"
+
+        with (
+            patch("subprocess.run", return_value=mock_result),
+            pytest.raises(DeltaError, match="crashed.*exit code -11"),
+        ):
+            _run_delta_subprocess("abfss://ws@host/path", {"token": "t"})
+
+    def test_timeout_raises(self):
+        """Subprocess timeout raises DeltaError."""
+        with (
+            patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="test", timeout=30)),
+            pytest.raises(DeltaError, match="timed out"),
+        ):
+            _run_delta_subprocess("abfss://ws@host/path", {"token": "t"})
+
+    def test_invalid_json_raises(self):
+        """Invalid JSON output raises DeltaError."""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "not valid json{{"
+        mock_result.stderr = ""
+
+        with (
+            patch("subprocess.run", return_value=mock_result),
+            pytest.raises(DeltaError, match="invalid output"),
+        ):
+            _run_delta_subprocess("abfss://ws@host/path", {"token": "t"})
+
+    def test_error_result_raises(self):
+        """Subprocess returning ok=False raises DeltaError via get_metadata."""
+        fake_output = json.dumps({"ok": False, "error": "DeltaError: No files in log"})
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = fake_output
+        mock_result.stderr = ""
+
+        with patch("subprocess.run", return_value=mock_result):
+            result = _run_delta_subprocess("abfss://ws@host/path", {"token": "t"})
+
+        assert result["ok"] is False
+        assert "No files in log" in result["error"]

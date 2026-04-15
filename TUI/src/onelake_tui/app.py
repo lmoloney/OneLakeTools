@@ -14,7 +14,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Header, Input, Tree
 
-from onelake_client import OneLakeClient, __version__, create_credential, get_environment
+from onelake_client import OneLakeClient, create_credential, get_environment
 from onelake_client.environment import DEFAULT_ENVIRONMENT, ENVIRONMENTS, FabricEnvironment
 from onelake_tui.detail import DetailPanel
 from onelake_tui.item_list import ItemList
@@ -360,6 +360,13 @@ class OneLakeApp(App):
                 logger.exception("Error closing client during unmount")
 
 
+def _get_version() -> str:
+    """Get the package version from installed metadata."""
+    from importlib.metadata import version
+
+    return version("onelake-tui")
+
+
 def run() -> None:
     """Entry point for the onelake-tui command."""
     parser = argparse.ArgumentParser(
@@ -369,7 +376,7 @@ def run() -> None:
     parser.add_argument(
         "--version",
         action="version",
-        version=f"%(prog)s {__version__}",
+        version=f"%(prog)s {_get_version()}",
     )
     parser.add_argument(
         "--env",

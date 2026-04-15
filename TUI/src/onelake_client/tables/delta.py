@@ -113,8 +113,9 @@ def _run_delta_subprocess(
 ) -> dict:
     """Run the Delta metadata script in a subprocess.
 
-    Uses subprocess.Popen instead of multiprocessing.Process to avoid
-    file-descriptor inheritance issues on macOS + Python 3.14.
+    Uses ``subprocess.run`` to invoke a separate Python process instead of
+    multiprocessing.Process, avoiding file-descriptor inheritance issues on
+    macOS + Python 3.14.
     Passes data via stdin to keep bearer tokens out of ps output.
     """
     import json

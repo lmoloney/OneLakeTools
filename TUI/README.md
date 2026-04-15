@@ -8,9 +8,9 @@ az login
 onelake-tui
 ```
 
-![OneLake TUI — browsing a Fabric lakehouse](../docs/branding/TUI-Open.jpg)
+![OneLake TUI — browsing a Fabric lakehouse](https://raw.githubusercontent.com/lmoloney/OneLakeTools/main/docs/branding/TUI-Open.jpg)
 
-![Delta table detail view](../docs/branding/Table-Detail.jpg)
+![Delta table detail view](https://raw.githubusercontent.com/lmoloney/OneLakeTools/main/docs/branding/Table-Detail.jpg)
 
 ## What is this?
 
