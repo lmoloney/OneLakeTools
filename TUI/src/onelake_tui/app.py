@@ -65,6 +65,7 @@ class OneLakeApp(App):
     BINDINGS = [
         Binding("q", "quit", "Quit", priority=True),
         Binding("r", "refresh", "Refresh"),
+        Binding("S", "screenshot", "Screenshot", show=False),
         Binding("y", "copy_path", "Copy Path"),
         Binding("Y", "copy_abfss", "Copy ABFSS", show=False),
         Binding("ctrl+y", "copy_https", "Copy URL", show=False),
@@ -239,9 +240,14 @@ class OneLakeApp(App):
         """Show keyboard shortcuts."""
         self.notify(
             "↑↓ Navigate  │  Enter Preview  │  / Search  │  r Refresh  │  q Quit\n"
-            "y Copy path  │  Y Copy ABFSS  │  Ctrl+Y Copy URL",
+            "y Copy path  │  Y Copy ABFSS  │  Ctrl+Y Copy URL  │  S Screenshot",
             timeout=10,
         )
+
+    def action_screenshot(self) -> None:
+        """Save an SVG screenshot to the current directory."""
+        path = self.save_screenshot()
+        self.notify(f"Screenshot saved: {path}", timeout=5)
 
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
         """Handle Enter on tree nodes — preview files."""
