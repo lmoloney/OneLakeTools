@@ -1,5 +1,5 @@
 [project]
-name = "onelake-tools"
+name = "onelake-tui"
 version = "0.2.0b1"
 description = "Unofficial TUI and client library for Microsoft Fabric OneLake"
 readme = "README.md"
