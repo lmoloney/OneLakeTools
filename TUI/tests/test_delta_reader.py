@@ -423,6 +423,15 @@ class TestStorageOptions:
 class TestRunDeltaSubprocess:
     """Test the subprocess path for Delta metadata loading."""
 
+    def _mock_popen(self, *, returncode=0, stdout="", stderr=""):
+        """Create a mock Popen that returns given stdout/stderr from communicate()."""
+        mock_proc = MagicMock()
+        mock_proc.communicate.return_value = (stdout, stderr)
+        mock_proc.returncode = returncode
+        mock_proc.kill = MagicMock()
+        mock_proc.wait = MagicMock()
+        return patch("subprocess.Popen", return_value=mock_proc)
+
     def test_success(self):
         """Successful subprocess returns parsed metadata dict."""
         fake_output = json.dumps(
@@ -438,12 +447,8 @@ class TestRunDeltaSubprocess:
                 "description": None,
             }
         )
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = fake_output
-        mock_result.stderr = ""
 
-        with patch("subprocess.run", return_value=mock_result):
+        with self._mock_popen(stdout=fake_output):
             result = _run_delta_subprocess("abfss://ws@host/path", {"token": "t"})
 
         assert result["ok"] is True
@@ -452,47 +457,38 @@ class TestRunDeltaSubprocess:
 
     def test_nonzero_exit_raises(self):
         """Non-zero exit code raises DeltaError."""
-        mock_result = MagicMock()
-        mock_result.returncode = -11  # SIGSEGV
-        mock_result.stdout = ""
-        mock_result.stderr = "panic: something went wrong"
-
         with (
-            patch("subprocess.run", return_value=mock_result),
+            self._mock_popen(returncode=-11, stderr="panic: something went wrong"),
             pytest.raises(DeltaError, match="crashed.*exit code -11"),
         ):
             _run_delta_subprocess("abfss://ws@host/path", {"token": "t"})
 
     def test_timeout_raises(self):
         """Subprocess timeout raises DeltaError."""
+        mock_proc = MagicMock()
+        mock_proc.communicate.side_effect = subprocess.TimeoutExpired(cmd="test", timeout=30)
+        mock_proc.kill = MagicMock()
+        mock_proc.wait = MagicMock()
+
         with (
-            patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="test", timeout=30)),
+            patch("subprocess.Popen", return_value=mock_proc),
             pytest.raises(DeltaError, match="timed out"),
         ):
             _run_delta_subprocess("abfss://ws@host/path", {"token": "t"})
 
     def test_invalid_json_raises(self):
         """Invalid JSON output raises DeltaError."""
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = "not valid json{{"
-        mock_result.stderr = ""
-
         with (
-            patch("subprocess.run", return_value=mock_result),
+            self._mock_popen(stdout="not valid json{{"),
             pytest.raises(DeltaError, match="invalid output"),
         ):
             _run_delta_subprocess("abfss://ws@host/path", {"token": "t"})
 
     def test_error_result_raises(self):
-        """Subprocess returning ok=False raises DeltaError via get_metadata."""
+        """Subprocess returning ok=False is propagated as-is."""
         fake_output = json.dumps({"ok": False, "error": "DeltaError: No files in log"})
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = fake_output
-        mock_result.stderr = ""
 
-        with patch("subprocess.run", return_value=mock_result):
+        with self._mock_popen(stdout=fake_output):
             result = _run_delta_subprocess("abfss://ws@host/path", {"token": "t"})
 
         assert result["ok"] is False

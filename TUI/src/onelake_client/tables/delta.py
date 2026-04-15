@@ -113,9 +113,8 @@ def _run_delta_subprocess(
 ) -> dict:
     """Run the Delta metadata script in a subprocess.
 
-    Uses ``subprocess.run`` to invoke a separate Python process instead of
-    multiprocessing.Process, avoiding file-descriptor inheritance issues on
-    macOS + Python 3.14.
+    Uses ``subprocess.Popen`` with explicit pipe management to avoid
+    file-descriptor inheritance issues on macOS + Python 3.14.
     Passes data via stdin to keep bearer tokens out of ps output.
     """
     import json
@@ -123,31 +122,35 @@ def _run_delta_subprocess(
     import sys
 
     input_data = json.dumps({"uri": uri, "storage_options": storage_options})
+    proc = subprocess.Popen(
+        [sys.executable, "-c", _METADATA_SCRIPT],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        close_fds=True,
+        start_new_session=True,
+    )
     try:
-        result = subprocess.run(
-            [sys.executable, "-c", _METADATA_SCRIPT],
-            input=input_data,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise DeltaError(f"Delta table load timed out after {timeout}s") from exc
+        stdout, stderr = proc.communicate(input=input_data, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        raise DeltaError(f"Delta table load timed out after {timeout}s") from None
 
-    if result.returncode != 0:
-        stderr = result.stderr.strip()
-        # Truncate long Rust panic output
-        if len(stderr) > 300:
-            stderr = stderr[:300] + "…"
+    if proc.returncode != 0:
+        err = (stderr or "").strip()
+        if len(err) > 300:
+            err = err[:300] + "…"
         raise DeltaError(
-            f"Delta reader process crashed (exit code {result.returncode}). "
-            f"{stderr or 'This table may use features not supported by the local reader.'}"
+            f"Delta reader process crashed (exit code {proc.returncode}). "
+            f"{err or 'This table may use features not supported by the local reader.'}"
         )
 
     try:
-        return json.loads(result.stdout)
+        return json.loads(stdout)
     except json.JSONDecodeError as exc:
-        raise DeltaError(f"Delta reader returned invalid output: {result.stdout[:200]}") from exc
+        raise DeltaError(f"Delta reader returned invalid output: {stdout[:200]}") from exc
 
 
 class DeltaTableReader:
