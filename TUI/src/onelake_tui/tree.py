@@ -97,8 +97,10 @@ class OneLakeTree(Tree[NodeData]):
             self.root.add_leaf("(no file storage for this item type)", data=None)
             return
 
+        self.root.add_leaf("⏳ Loading...", data=None)
         try:
             paths = await self.client.dfs.list_paths(workspace_id, item.id)
+            self.root.remove_children()
             for p in sorted(paths, key=lambda x: (not x.is_directory, x.name.casefold())):
                 name = p.name.split("/")[-1] if "/" in p.name else p.name
                 if p.is_directory:

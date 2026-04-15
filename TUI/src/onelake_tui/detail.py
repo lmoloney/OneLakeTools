@@ -209,7 +209,11 @@ class DetailPanel(VerticalScroll):
             # Schema folders (e.g. Tables/dbo) don't have _delta_log and
             # the Rust FFI can panic instead of raising a Python exception.
             delta_log_path = f"{data.item_path}/Tables/{data.table_name}/_delta_log"
-            has_delta = await self.client.dfs.exists(data.workspace, delta_log_path)
+            try:
+                has_delta = await self.client.dfs.exists(data.workspace, delta_log_path)
+            except Exception as check_err:
+                logger.debug("Failed to check _delta_log existence: %s", check_err)
+                has_delta = True  # optimistic: try loading, let error handler catch it
             if self._current_table_data is not data:
                 return
             if not has_delta:
