@@ -51,7 +51,7 @@ def _schema_to_columns(schema) -> list[Column]:
 # ── Subprocess workers (top-level for pickling) ────────────────────────
 
 
-_METADATA_SCRIPT = '''
+_METADATA_SCRIPT = """
 import sys, json
 from deltalake import DeltaTable
 
@@ -105,7 +105,7 @@ try:
     }, sys.stdout)
 except Exception as e:
     json.dump({"ok": False, "error": f"{type(e).__name__}: {e}"}, sys.stdout)
-'''
+"""
 
 
 def _run_delta_subprocess(
@@ -146,9 +146,7 @@ def _run_delta_subprocess(
     try:
         return json.loads(result.stdout)
     except json.JSONDecodeError as exc:
-        raise DeltaError(
-            f"Delta reader returned invalid output: {result.stdout[:200]}"
-        ) from exc
+        raise DeltaError(f"Delta reader returned invalid output: {result.stdout[:200]}") from exc
 
 
 class DeltaTableReader:
@@ -205,9 +203,7 @@ class DeltaTableReader:
     async def _get_metadata_subprocess(self, uri: str, table_name: str) -> DeltaTableInfo:
         """Load metadata in an isolated subprocess (Rust-panic safe)."""
         storage_options = self._get_storage_options()
-        result = await asyncio.to_thread(
-            _run_delta_subprocess, uri, storage_options
-        )
+        result = await asyncio.to_thread(_run_delta_subprocess, uri, storage_options)
 
         if not result.get("ok"):
             raise DeltaError(result.get("error", "Unknown error in Delta reader"))
