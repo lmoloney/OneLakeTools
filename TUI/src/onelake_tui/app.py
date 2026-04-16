@@ -362,9 +362,12 @@ class OneLakeApp(App):
 
 def _get_version() -> str:
     """Get the package version from installed metadata."""
-    from importlib.metadata import version
+    from importlib.metadata import PackageNotFoundError, version
 
-    return version("onelake-tui")
+    try:
+        return version("onelake-tui")
+    except PackageNotFoundError:
+        return "unknown"
 
 
 def run() -> None:
