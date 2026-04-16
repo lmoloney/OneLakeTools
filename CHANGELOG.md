@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - `pip install onelake-tui` — PyPI packaging with full project metadata (classifiers, URLs, keywords)
+- `pip install --pre onelake-tui` — pre-release install path for beta builds
 - `--version` CLI flag (`onelake-tui --version`)
 - PEP 561 `py.typed` markers for type-checker compatibility
 - PyPI publish workflow via GitHub Actions (OIDC trusted publishers)

@@ -14,6 +14,8 @@ az login
 onelake-tui
 ```
 
+`onelake-tui` is the PyPI distribution for this repo and includes both the TUI and the bundled `onelake_client` library.
+
 **Highlights:**
 - Three-panel layout: workspace picker → item list → DFS tree + preview
 - Rich file preview: Markdown, JSON, CSV, Parquet, Avro, syntax-highlighted code
@@ -26,7 +28,7 @@ See [`TUI/README.md`](TUI/README.md) for full documentation.
 
 ### 📦 Included: OneLake Client Library
 
-The TUI ships with a standalone async Python client that you can also use directly:
+The TUI ships with a standalone async Python client that you can also use directly. We may publish the client separately in a future release, but today it is distributed with `onelake-tui`.
 
 ```python
 from onelake_client import OneLakeClient

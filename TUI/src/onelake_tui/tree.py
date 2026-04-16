@@ -127,8 +127,10 @@ class OneLakeTree(Tree[NodeData]):
             if not paths:
                 self.root.add_leaf("(no files)", data=None)
         except NotFoundError:
+            self.root.remove_children()
             self.root.add_leaf("(no DFS storage for this item)", data=None)
         except Exception as e:
+            self.root.remove_children()
             self.root.add_leaf(f"❌ {e}", data=None)
             logger.exception("Failed to load DFS paths for %s", item.display_name)
             self.app.notify(f"Error loading paths: {e}", severity="error", timeout=20, markup=False)

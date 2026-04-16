@@ -8,6 +8,8 @@ az login
 onelake-tui
 ```
 
+`onelake-tui` is the published PyPI package and currently bundles both the terminal UI and the `onelake_client` library.
+
 ![OneLake TUI — browsing a Fabric lakehouse](https://raw.githubusercontent.com/lmoloney/OneLakeTools/main/docs/branding/TUI-Open.jpg)
 
 ![Delta table detail view](https://raw.githubusercontent.com/lmoloney/OneLakeTools/main/docs/branding/Table-Detail.jpg)
