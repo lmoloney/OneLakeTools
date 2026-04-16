@@ -39,7 +39,7 @@ def test_path_with_special_chars():
     special_name = "data [copy]/file (1).csv"
     path = PathInfo(name=special_name, isDirectory=False, contentLength=42)
     assert path.name == special_name
-    
+
     # Test brackets and backticks
     brackets_name = "[file]_`code`.txt"
     path2 = PathInfo(name=brackets_name, isDirectory=False)
@@ -48,15 +48,15 @@ def test_path_with_special_chars():
 
 def test_api_response_wrong_type():
     """Verify Workspace rejects wrong type (int instead of str).
-    
+
     Pydantic v2 is strict about types and does NOT coerce int → str
     for string fields by default. This test verifies the rejection.
     """
-    
+
     # Pydantic rejects the wrong type
     with pytest.raises(ValidationError) as exc_info:
         Workspace(id="ws", displayName=12345, type="Workspace")  # type: ignore
-    
+
     # Verify it's a type validation error
     assert "string_type" in str(exc_info.value)
 
@@ -87,7 +87,7 @@ def test_deeply_nested_path():
     """Verify PathInfo handles deeply nested paths (100 levels)."""
     deep_path_parts = ["dir"] * 100 + ["file.csv"]
     deep_path = "/".join(deep_path_parts)
-    
+
     path = PathInfo(name=deep_path, isDirectory=False)
     assert path.name == deep_path
     assert path.name.count("/") == 100
@@ -127,22 +127,22 @@ class _StatusBarHarness(App):
 @pytest.mark.asyncio
 async def test_status_bar_very_long_path():
     """Verify StatusBar truncates very long paths and render doesn't crash.
-    
+
     Path is truncated to fit in 80 chars, replaced with "…" prefix.
     Verify render() output is valid and reasonably short.
     """
     app = _StatusBarHarness()
-    
+
     async with app.run_test() as pilot:
         await pilot.pause()
         status = app.query_one("#status", StatusBar)
-        
+
         # Set a 200-char path
         long_path = "onelake://" + "a" * 200
         status.path = long_path
-        
+
         output = status.render()
-        
+
         # Should be truncated with "…" prefix
         assert "…" in output or len(output.split("\n")[0]) < 200
         # Render output should not be excessively long
@@ -153,20 +153,20 @@ async def test_status_bar_very_long_path():
 @pytest.mark.asyncio
 async def test_status_bar_special_chars_in_path():
     """Verify StatusBar handles special chars and Rich markup escaping.
-    
+
     Path with brackets, braces, etc. should not crash render().
     Rich's escape() function should handle markup chars.
     """
     app = _StatusBarHarness()
-    
+
     async with app.run_test() as pilot:
         await pilot.pause()
         status = app.query_one("#status", StatusBar)
-        
+
         # Set path with special chars that could be Rich markup
         special_path = "onelake://ws/[special]/file [copy].txt"
         status.path = special_path
-        
+
         # render() should not crash
         output = status.render()
         assert output is not None
@@ -177,20 +177,20 @@ async def test_status_bar_special_chars_in_path():
 async def test_status_bar_render_with_various_fields():
     """Verify StatusBar render handles various combinations of fields."""
     app = _StatusBarHarness()
-    
+
     async with app.run_test() as pilot:
         await pilot.pause()
         status = app.query_one("#status", StatusBar)
-        
+
         # Test with various field combinations
         status.path = "onelake://test-workspace/item-name"
         status.item_count = 42
         status.auth_method = "msal"
         status.identity = "user@contoso.com"
         status.env_name = "DEV"
-        
+
         output = status.render()
-        
+
         assert "onelake://test-workspace/item-name" in output
         assert "42 items" in output
         assert "msal" in output
@@ -202,19 +202,19 @@ async def test_status_bar_render_with_various_fields():
 async def test_status_bar_empty_fields():
     """Verify StatusBar render handles empty/zero fields gracefully."""
     app = _StatusBarHarness()
-    
+
     async with app.run_test() as pilot:
         await pilot.pause()
         status = app.query_one("#status", StatusBar)
-        
+
         # Empty/zero values
         status.path = ""
         status.item_count = 0
         status.identity = ""
         status.env_name = ""
-        
+
         output = status.render()
-        
+
         # Should not crash and produce valid output
         assert output is not None
         assert len(output) > 0
@@ -248,23 +248,23 @@ async def test_detail_panel_folder_node_special_chars():
     """Verify DetailPanel._show_folder handles special chars in directory name."""
     client = _make_mock_client()
     app = _DetailHarness(client)
-    
+
     async with app.run_test() as pilot:
         await pilot.pause()
         detail = app.query_one("#detail", DetailPanel)
         detail._workspace_name = "TestWS"
         detail._item_name = "TestItem"
-        
+
         # FolderNode with special chars in directory
         folder = FolderNode(
             workspace="ws",
             item_path="item",
             directory="Files/[backup]/data (v2)",
         )
-        
+
         detail.update_for_node(folder)
         await pilot.pause()
-        
+
         # Should render without crash
         assert detail.is_mounted
 
@@ -274,20 +274,20 @@ async def test_detail_panel_file_node_very_long_path():
     """Verify DetailPanel._show_file handles very long file paths."""
     client = _make_mock_client()
     app = _DetailHarness(client)
-    
+
     async with app.run_test() as pilot:
         await pilot.pause()
         detail = app.query_one("#detail", DetailPanel)
         detail._workspace_name = "TestWS"
         detail._item_name = "TestItem"
-        
+
         # Very long path
         long_path = "item/Files/" + "/".join(["subdir"] * 50) + "/file.txt"
         file_node = FileNode(workspace="ws", path=long_path, size=1024)
-        
+
         detail.update_for_node(file_node)
         await pilot.pause()
-        
+
         # Should render without crash
         assert detail.is_mounted
 
@@ -297,23 +297,23 @@ async def test_detail_panel_table_node_complex_name():
     """Verify DetailPanel._show_table handles complex table names."""
     client = _make_mock_client()
     app = _DetailHarness(client)
-    
+
     async with app.run_test() as pilot:
         await pilot.pause()
         detail = app.query_one("#detail", DetailPanel)
         detail._workspace_name = "TestWS"
         detail._item_name = "TestItem"
-        
+
         # Complex table name with special chars
         table = TableNode(
             workspace="ws",
             item_path="item",
             table_name="[dbo].[my_table-v2.0]",
         )
-        
+
         detail.update_for_node(table)
         await pilot.pause()
-        
+
         # Should render without crash
         assert detail.is_mounted
 
@@ -323,13 +323,13 @@ async def test_detail_panel_rapid_node_changes_with_edge_cases():
     """Verify rapid switching between edge-case nodes doesn't crash."""
     client = _make_mock_client()
     app = _DetailHarness(client)
-    
+
     async with app.run_test() as pilot:
         await pilot.pause()
         detail = app.query_one("#detail", DetailPanel)
         detail._workspace_name = "TestWS"
         detail._item_name = "TestItem"
-        
+
         # Create nodes with edge cases
         folder_with_special = FolderNode(
             workspace="ws", item_path="item", directory="Files/[archive]"
@@ -342,16 +342,16 @@ async def test_detail_panel_rapid_node_changes_with_edge_cases():
         table_complex = TableNode(
             workspace="ws", item_path="item", table_name="schema/[table]/name"
         )
-        
+
         # Rapid switching
         for _ in range(5):
             detail.update_for_node(folder_with_special)
             detail.update_for_node(file_with_long_path)
             detail.update_for_node(table_complex)
             detail.update_for_node(None)
-        
+
         await pilot.pause()
-        
+
         # Should not crash
         assert detail.is_mounted
 
@@ -368,7 +368,7 @@ def test_path_info_alias_fields():
     )
     assert path.is_directory is False
     assert path.content_length == 1024
-    
+
     # Also test populate_by_name with snake_case
     path2 = PathInfo(
         name="test2.txt",

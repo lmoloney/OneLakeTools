@@ -666,9 +666,7 @@ class TestReadCDF:
             )
 
         assert result == mock_cdf_table
-        dt_mock.load_cdf.assert_called_once_with(
-            starting_version=5, ending_version=10
-        )
+        dt_mock.load_cdf.assert_called_once_with(starting_version=5, ending_version=10)
 
     @pytest.mark.asyncio()
     async def test_read_cdf_not_enabled(self, auth):
@@ -677,8 +675,9 @@ class TestReadCDF:
         dt_mock.load_cdf.side_effect = DeltaError("Change data feed is not enabled for this table")
 
         reader = DeltaTableReader(auth)
-        with self._patch_reader(reader, dt_mock), pytest.raises(
-            DeltaError, match="Change data feed is not enabled"
+        with (
+            self._patch_reader(reader, dt_mock),
+            pytest.raises(DeltaError, match="Change data feed is not enabled"),
         ):
             await reader.read_cdf("ws", "LH.Lakehouse", "t")
 

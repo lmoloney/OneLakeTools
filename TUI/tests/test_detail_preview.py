@@ -221,9 +221,7 @@ async def test_preview_binary_shows_hex():
         statics = detail.query(Static)
         static_texts = [_get_widget_text(w) for w in statics]
         # Hex dump should mention first 256 bytes or contain hex content
-        assert any(
-            "Binary file" in txt or "00000000" in txt for txt in static_texts
-        ), (
+        assert any("Binary file" in txt or "00000000" in txt for txt in static_texts), (
             f"Expected hex dump or binary file message. Found: {static_texts}"
         )
 

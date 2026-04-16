@@ -266,9 +266,7 @@ async def test_rapid_table_navigation_no_duplicate_ids():
         detail._item_name = "TestItem"
 
         table_a = TableNode(workspace="ws-1", item_path="item-1", table_name="dbo")
-        table_b = TableNode(
-            workspace="ws-1", item_path="item-1", table_name="dbo/my_table"
-        )
+        table_b = TableNode(workspace="ws-1", item_path="item-1", table_name="dbo/my_table")
 
         # Simulate rapid navigation: update_node fires multiple times
         # without awaiting removal of the previous widgets
@@ -357,8 +355,7 @@ async def test_show_table_schema_folder_fallback():
         statics = detail.query(Static)
         static_texts = [_get_widget_text(w) for w in statics]
         assert any("Not a Delta table" in txt for txt in static_texts), (
-            f"Expected 'Not a Delta table' message in DetailPanel. "
-            f"Found: {static_texts}"
+            f"Expected 'Not a Delta table' message in DetailPanel. Found: {static_texts}"
         )
 
 
