@@ -133,10 +133,10 @@ async def test_status_bar_msit_env_escaped():
         status.env_name = "MSIT"
         output = status.render()
 
-        # The render() method uses \\[ escaping for non-PROD env names
-        # Verify the escaped form appears in the output
-        assert "\\[MSIT]" in output or "[MSIT]" in output, (
-            "StatusBar should display MSIT environment name with proper escaping"
+        # The render() method returns Rich markup, so the environment label
+        # must be bracket-escaped to avoid being interpreted as a tag.
+        assert "\\[MSIT]" in output, (
+            "StatusBar should escape MSIT environment brackets in Rich markup output"
         )
 
 
