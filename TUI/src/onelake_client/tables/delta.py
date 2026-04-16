@@ -118,18 +118,24 @@ def _run_delta_subprocess(
     Passes data via stdin to keep bearer tokens out of ps output.
     """
     import json
+    import os
     import subprocess
     import sys
 
     input_data = json.dumps({"uri": uri, "storage_options": storage_options})
+    popen_kwargs: dict[str, object] = {
+        "stdin": subprocess.PIPE,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "text": True,
+        "close_fds": True,
+    }
+    if os.name == "posix":
+        popen_kwargs["start_new_session"] = True
+
     proc = subprocess.Popen(
         [sys.executable, "-c", _METADATA_SCRIPT],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        close_fds=True,
-        start_new_session=True,
+        **popen_kwargs,  # type: ignore[arg-type]
     )
     try:
         stdout, stderr = proc.communicate(input=input_data, timeout=timeout)

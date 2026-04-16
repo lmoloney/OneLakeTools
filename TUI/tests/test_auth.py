@@ -2,12 +2,15 @@
 
 import base64
 import json
-from unittest.mock import MagicMock
+import time
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from onelake_client.auth import OneLakeAuth, _decode_jwt_claims, create_credential
+from onelake_client.auth import OneLakeAuth, _CachedToken, _decode_jwt_claims, create_credential
 from onelake_client.environment import PROD
+from onelake_client.exceptions import AuthenticationError
+from azure.core.exceptions import ClientAuthenticationError
 
 from .conftest import FakeCredential
 
@@ -163,3 +166,93 @@ def test_decode_jwt_claims_invalid_token():
 def test_create_credential_unknown_kind():
     with pytest.raises(ValueError, match="Unknown credential kind"):
         create_credential("bogus")
+
+
+# ── _CachedToken.is_expired tests ───────────────────────────────────────
+
+
+def test_cached_token_not_expired():
+    """Token expiring 10 minutes from now should not be expired."""
+    expires_on = time.time() + 600
+    token = _CachedToken(token="test-token", expires_on=expires_on)
+    assert token.is_expired is False
+
+
+def test_cached_token_expired():
+    """Token that expired 1 minute ago should be expired."""
+    expires_on = time.time() - 60
+    token = _CachedToken(token="test-token", expires_on=expires_on)
+    assert token.is_expired is True
+
+
+def test_cached_token_within_refresh_buffer():
+    """Token expiring in 200 seconds (within 300s buffer) should trigger early refresh."""
+    expires_on = time.time() + 200
+    token = _CachedToken(token="test-token", expires_on=expires_on)
+    # Should be expired because 200 seconds < 300 second buffer
+    assert token.is_expired is True
+
+
+def test_cached_token_exactly_at_boundary():
+    """Token expiring at exactly 300 seconds should be expired (>= comparison)."""
+    # Use patch to make time.time() deterministic
+    current_time = 1000.0
+    expires_on = current_time + 300  # Exactly at buffer boundary
+
+    with patch("onelake_client.auth.time.time", return_value=current_time):
+        token = _CachedToken(token="test-token", expires_on=expires_on)
+        # At boundary: time.time() >= (expires_on - 300) => 1000 >= 1000 => True
+        assert token.is_expired is True
+
+
+def test_get_token_refreshes_expired():
+    """Expired token should be refreshed on next get_token call."""
+
+    class MultiTokenCredential:
+        """Credential that returns different tokens on successive calls."""
+
+        def __init__(self):
+            self.call_count = 0
+
+        def get_token(self, *scopes, **kwargs):
+            self.call_count += 1
+            token = f"token-{self.call_count}"
+            # Return far-future expiry on first call
+            expires_on = time.time() + 10000 if self.call_count == 1 else time.time() + 10000
+            return MagicMock(token=token, expires_on=expires_on)
+
+    cred = MultiTokenCredential()
+    auth = OneLakeAuth(credential=cred)
+
+    # First call: credential gets token-1
+    token1 = auth.get_token(PROD.fabric_scope)
+    assert token1 == "token-1"
+    assert cred.call_count == 1
+
+    # Store the original expires_on
+    cached_token = auth._token_cache[PROD.fabric_scope]
+    original_expires_on = cached_token.expires_on
+
+    # Patch time.time to simulate token expiry
+    # Mock returns a time that is way past the token expiry
+    with patch("onelake_client.auth.time.time") as mock_time:
+        mock_time.return_value = original_expires_on + 1000  # Well past expiry
+
+        token2 = auth.get_token(PROD.fabric_scope)
+        # Second call should get a new token (credential called again)
+        assert token2 == "token-2"
+        assert cred.call_count == 2
+
+
+def test_get_token_auth_failure_raises():
+    """Credential auth failure should raise AuthenticationError."""
+
+    class FailingCredential:
+        def get_token(self, *scopes, **kwargs):
+            raise ClientAuthenticationError("Authentication failed")
+
+    cred = FailingCredential()
+    auth = OneLakeAuth(credential=cred)
+
+    with pytest.raises(AuthenticationError, match="Authentication failed"):
+        auth.get_token(PROD.fabric_scope)
