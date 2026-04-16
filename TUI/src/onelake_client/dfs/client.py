@@ -235,6 +235,7 @@ class DfsClient:
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code
+                await exc.response.aread()
                 body = exc.response.text
                 if status == 404:
                     raise NotFoundError(

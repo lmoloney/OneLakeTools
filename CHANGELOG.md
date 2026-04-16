@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.0b1] - 2026-04-07
+
+### Added
+
+- `pip install onelake-tui` — PyPI packaging with full project metadata (classifiers, URLs, keywords)
+- `pip install --pre onelake-tui` — pre-release install path for beta builds
+- `--version` CLI flag (`onelake-tui --version`)
+- PEP 561 `py.typed` markers for type-checker compatibility
+- PyPI publish workflow via GitHub Actions (OIDC trusted publishers)
+
+### Fixed
+
+- Crash when highlighting schema folders (e.g. `Tables/dbo`) in the tree — now shows informative message instead
+- Crash from Rust panics in the deltalake library on certain tables — Delta metadata loading now runs in a subprocess
+- Username sometimes missing from status bar — added identity resolution fallback
+- TUI screenshot in README documentation
+
 ## [0.1.0] - 2026-04-06
 
 ### Added

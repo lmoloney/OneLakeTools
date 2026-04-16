@@ -67,9 +67,11 @@ __all__ = [
     "PermissionDeniedError",
     "RateLimitError",
     "ApiError",
+    # Version
+    "__version__",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0b1"
 
 
 class OneLakeClient:

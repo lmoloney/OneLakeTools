@@ -2,46 +2,33 @@
 
 Unofficial developer tools for [Microsoft Fabric](https://learn.microsoft.com/en-us/fabric/) OneLake.
 
-## Tools
+![OneLake TUI](docs/branding/TUI-Open.jpg)
 
-### 🖥️ OneLake TUI (Unofficial) ([`TUI/`](TUI/))
+## 🖥️ OneLake TUI
 
-An unofficial terminal UI for browsing Fabric workspaces, lakehouses, and Delta tables — built with [Textual](https://textual.textualize.io/).
-
-**Features:**
-- Three-panel layout: workspace picker → item list → DFS tree + preview
-- Animated OneLake splash art (chafa ASCII logo + figlet `ansi_shadow` wordmark with shimmer)
-- Live `/` search filtering workspaces
-- Rich file preview: Markdown, JSON (NDJSON), CSV, Parquet (pyarrow), Avro (fastavro), syntax-highlighted code
-- Selectable/copyable preview text
-- Delta table tabbed detail: schema, data preview, transaction history, CDF
-- Schema-aware table detection (mirrored DB `Tables/schema/table` + lakehouse `Tables/table`)
-- Expandable tables — browse raw `_delta_log/`, parquet files
-- Human-readable `onelake://` paths everywhere
-- Multi-environment support via `--env` flag (PROD, MSIT, DXT, DAILY)
-- 3-line status bar with keyboard shortcuts always visible
-- Keyboard-driven, zero-config (uses `az login`)
-
-**Quick start:**
+A terminal UI for browsing Fabric workspaces, lakehouses, and Delta tables. No portal, no notebooks — just your terminal.
 
 ```bash
-cd TUI
-uv sync
-uv run onelake-tui              # default (PROD)
-uv run onelake-tui --env msit   # Microsoft internal testing
+pip install onelake-tui
+az login
+onelake-tui
 ```
+
+`onelake-tui` is the PyPI distribution for this repo and includes both the TUI and the bundled `onelake_client` library.
+
+**Highlights:**
+- Three-panel layout: workspace picker → item list → DFS tree + preview
+- Rich file preview: Markdown, JSON, CSV, Parquet, Avro, syntax-highlighted code
+- Delta table detail: schema, data preview, transaction history, CDF
+- Live workspace search, human-readable `onelake://` paths, clipboard copy
+- Multi-environment support via `--env` flag (PROD, MSIT, DXT, DAILY)
+- Keyboard-driven, zero-config (uses `az login`)
 
 See [`TUI/README.md`](TUI/README.md) for full documentation.
 
-### 📦 OneLake Client Library ([`TUI/src/onelake_client/`](TUI/src/onelake_client/))
+### 📦 Included: OneLake Client Library
 
-A standalone async Python client covering three OneLake API surfaces, with built-in environment support for PROD, MSIT, DXT, and DAILY rings:
-
-| API | Module | Purpose |
-|-----|--------|---------|
-| Fabric REST | `fabric/` | Workspace/item enumeration (control plane) |
-| OneLake DFS | `dfs/` | File/folder operations via ADLS Gen2 (data plane) |
-| Table APIs | `tables/` | Delta Lake + Iceberg metadata (metadata plane) |
+The TUI ships with a standalone async Python client that you can also use directly. We may publish the client separately in a future release, but today it is distributed with `onelake-tui`.
 
 ```python
 from onelake_client import OneLakeClient
@@ -50,6 +37,12 @@ async with OneLakeClient() as client:
     workspaces = await client.fabric.list_workspaces()
     paths = await client.dfs.list_paths(ws_id, "MyLakehouse.Lakehouse")
 ```
+
+| API | Module | Purpose |
+|-----|--------|---------|
+| Fabric REST | `fabric/` | Workspace/item enumeration (control plane) |
+| OneLake DFS | `dfs/` | File/folder operations via ADLS Gen2 (data plane) |
+| Table APIs | `tables/` | Delta Lake + Iceberg metadata (metadata plane) |
 
 ## Authentication
 
@@ -79,7 +72,7 @@ Each environment maps to the correct Fabric REST and OneLake DFS hostnames autom
 ```bash
 cd TUI
 uv sync --all-extras    # Install all dependencies
-uv run pytest           # Run tests (43 unit + 6 integration)
+uv run pytest           # Run tests (182 unit + 6 integration)
 uv run ruff check src/  # Lint
 uv run onelake-tui      # Launch the TUI
 ```

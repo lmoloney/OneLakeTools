@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import json
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
+from deltalake.exceptions import DeltaError
 
 from onelake_client.environment import DAILY, MSIT, PROD
 from onelake_client.models.table import DeltaTableInfo
 from onelake_client.tables.delta import (
     DeltaTableReader,
     _build_table_uri,
+    _run_delta_subprocess,
     _schema_to_columns,
 )
 
@@ -189,6 +193,7 @@ class TestGetMetadata:
 
     def _patch_reader(self, reader, dt_mock):
         """Patch _load_table_sync to return our mock (avoids local-import issues)."""
+        reader._isolate = False  # use in-process path so mocks work
         return patch.object(reader, "_load_table_sync", return_value=dt_mock)
 
     @pytest.mark.asyncio()
@@ -299,6 +304,44 @@ class TestGetMetadata:
         uri = call_args[0][0]
         assert MSIT.dfs_host in uri
 
+    @pytest.mark.asyncio()
+    async def test_subprocess_path_used_by_default(self, auth):
+        """Default get_metadata path uses subprocess isolation output."""
+        reader = DeltaTableReader(auth)
+        fake_result = {
+            "ok": True,
+            "name": "subproc_table",
+            "columns": [{"name": "id", "type": "long", "nullable": False, "metadata": None}],
+            "version": 9,
+            "num_files": 4,
+            "size_bytes": 1234,
+            "partition_columns": ["pcol"],
+            "properties": {"delta.appendOnly": "true"},
+            "description": "from subprocess",
+        }
+        with patch("onelake_client.tables.delta._run_delta_subprocess", return_value=fake_result):
+            info = await reader.get_metadata("ws", "item", "subproc_table")
+
+        assert info.name == "subproc_table"
+        assert info.version == 9
+        assert info.num_files == 4
+        assert info.size_bytes == 1234
+        assert info.partition_columns == ["pcol"]
+        assert info.properties == {"delta.appendOnly": "true"}
+
+    @pytest.mark.asyncio()
+    async def test_subprocess_error_payload_raises_delta_error(self, auth):
+        """ok=False payload from subprocess is raised as DeltaError."""
+        reader = DeltaTableReader(auth)
+        with (
+            patch(
+                "onelake_client.tables.delta._run_delta_subprocess",
+                return_value={"ok": False, "error": "DeltaError: boom"},
+            ),
+            pytest.raises(DeltaError, match="boom"),
+        ):
+            await reader.get_metadata("ws", "item", "t")
+
 
 # ── Size computation error handling ─────────────────────────────────────
 
@@ -324,6 +367,7 @@ class TestSizeComputationErrors:
         return dt
 
     def _patch_reader(self, reader, dt_mock):
+        reader._isolate = False
         return patch.object(reader, "_load_table_sync", return_value=dt_mock)
 
     @pytest.mark.asyncio()
@@ -409,3 +453,317 @@ class TestStorageOptions:
         assert opts["account_name"] == "onelake"
         assert opts["azure_storage_token"] == "fake-token-12345"
         assert opts["account_host"] == "onelake.dfs.fabric.microsoft.com"
+
+
+# ── Subprocess isolation tests ──────────────────────────────────────────
+
+
+class TestRunDeltaSubprocess:
+    """Test the subprocess path for Delta metadata loading."""
+
+    def _mock_popen(self, *, returncode=0, stdout="", stderr=""):
+        """Create a mock Popen that returns given stdout/stderr from communicate()."""
+        mock_proc = MagicMock()
+        mock_proc.communicate.return_value = (stdout, stderr)
+        mock_proc.returncode = returncode
+        mock_proc.kill = MagicMock()
+        mock_proc.wait = MagicMock()
+        return patch("subprocess.Popen", return_value=mock_proc)
+
+    def test_success(self):
+        """Successful subprocess returns parsed metadata dict."""
+        fake_output = json.dumps(
+            {
+                "ok": True,
+                "name": "test_table",
+                "columns": [{"name": "id", "type": "long", "nullable": False, "metadata": None}],
+                "version": 3,
+                "num_files": 2,
+                "size_bytes": 1000,
+                "partition_columns": [],
+                "properties": {},
+                "description": None,
+            }
+        )
+
+        with self._mock_popen(stdout=fake_output):
+            result = _run_delta_subprocess("abfss://ws@host/path", {"token": "t"})
+
+        assert result["ok"] is True
+        assert result["name"] == "test_table"
+        assert result["version"] == 3
+
+    def test_nonzero_exit_raises(self):
+        """Non-zero exit code raises DeltaError."""
+        with (
+            self._mock_popen(returncode=-11, stderr="panic: something went wrong"),
+            pytest.raises(DeltaError, match="crashed.*exit code -11"),
+        ):
+            _run_delta_subprocess("abfss://ws@host/path", {"token": "t"})
+
+    def test_timeout_raises(self):
+        """Subprocess timeout raises DeltaError."""
+        mock_proc = MagicMock()
+        mock_proc.communicate.side_effect = subprocess.TimeoutExpired(cmd="test", timeout=30)
+        mock_proc.kill = MagicMock()
+        mock_proc.wait = MagicMock()
+
+        with (
+            patch("subprocess.Popen", return_value=mock_proc),
+            pytest.raises(DeltaError, match="timed out"),
+        ):
+            _run_delta_subprocess("abfss://ws@host/path", {"token": "t"})
+
+    def test_invalid_json_raises(self):
+        """Invalid JSON output raises DeltaError."""
+        with (
+            self._mock_popen(stdout="not valid json{{"),
+            pytest.raises(DeltaError, match="invalid output"),
+        ):
+            _run_delta_subprocess("abfss://ws@host/path", {"token": "t"})
+
+    def test_error_result_raises(self):
+        """Subprocess returning ok=False is propagated as-is."""
+        fake_output = json.dumps({"ok": False, "error": "DeltaError: No files in log"})
+
+        with self._mock_popen(stdout=fake_output):
+            result = _run_delta_subprocess("abfss://ws@host/path", {"token": "t"})
+
+        assert result["ok"] is False
+        assert "No files in log" in result["error"]
+
+
+# ── DeltaTableReader.read_sample ────────────────────────────────────────
+
+
+class TestReadSample:
+    """Test read_sample method for reading sample rows."""
+
+    @pytest.fixture()
+    def auth(self):
+        from onelake_client.auth import OneLakeAuth
+        from tests.conftest import FakeCredential
+
+        return OneLakeAuth(credential=FakeCredential())
+
+    def _patch_reader(self, reader, dt_mock):
+        """Patch _load_table_sync to return our mock."""
+        reader._isolate = False
+        return patch.object(reader, "_load_table_sync", return_value=dt_mock)
+
+    @pytest.mark.asyncio()
+    async def test_read_sample_returns_pyarrow_table(self, auth):
+        """read_sample returns a pyarrow Table from dataset.head()."""
+        # Mock pyarrow Table
+        mock_table = MagicMock()
+        mock_table.num_rows = 50
+
+        # Mock dataset with head() method
+        mock_dataset = MagicMock()
+        mock_dataset.head.return_value = mock_table
+
+        # Mock DeltaTable with to_pyarrow_dataset()
+        dt_mock = MagicMock()
+        dt_mock.to_pyarrow_dataset.return_value = mock_dataset
+
+        reader = DeltaTableReader(auth)
+        with self._patch_reader(reader, dt_mock):
+            result = await reader.read_sample("ws", "LH.Lakehouse", "customers")
+
+        assert result == mock_table
+        mock_dataset.head.assert_called_once_with(100)
+
+    @pytest.mark.asyncio()
+    async def test_read_sample_respects_limit(self, auth):
+        """read_sample passes the limit parameter to dataset.head()."""
+        mock_table = MagicMock()
+        mock_dataset = MagicMock()
+        mock_dataset.head.return_value = mock_table
+
+        dt_mock = MagicMock()
+        dt_mock.to_pyarrow_dataset.return_value = mock_dataset
+
+        reader = DeltaTableReader(auth)
+        with self._patch_reader(reader, dt_mock):
+            result = await reader.read_sample("ws", "LH.Lakehouse", "t", limit=10)
+
+        assert result == mock_table
+        mock_dataset.head.assert_called_once_with(10)
+
+    @pytest.mark.asyncio()
+    async def test_read_sample_empty_table(self, auth):
+        """read_sample handles empty table gracefully."""
+        mock_table = MagicMock()
+        mock_table.num_rows = 0
+
+        mock_dataset = MagicMock()
+        mock_dataset.head.return_value = mock_table
+
+        dt_mock = MagicMock()
+        dt_mock.to_pyarrow_dataset.return_value = mock_dataset
+
+        reader = DeltaTableReader(auth)
+        with self._patch_reader(reader, dt_mock):
+            result = await reader.read_sample("ws", "LH.Lakehouse", "t", limit=100)
+
+        assert result == mock_table
+        assert result.num_rows == 0
+
+
+# ── DeltaTableReader.read_cdf ───────────────────────────────────────────
+
+
+class TestReadCDF:
+    """Test read_cdf method for reading change data feed."""
+
+    @pytest.fixture()
+    def auth(self):
+        from onelake_client.auth import OneLakeAuth
+        from tests.conftest import FakeCredential
+
+        return OneLakeAuth(credential=FakeCredential())
+
+    def _patch_reader(self, reader, dt_mock):
+        """Patch _load_table_sync to return our mock."""
+        reader._isolate = False
+        return patch.object(reader, "_load_table_sync", return_value=dt_mock)
+
+    @pytest.mark.asyncio()
+    async def test_read_cdf_happy_path(self, auth):
+        """read_cdf returns pyarrow Table from load_cdf().read_all()."""
+        mock_cdf_table = MagicMock()
+        mock_cdf_table.num_rows = 25
+
+        # Mock CDF reader with read_all()
+        mock_cdf_reader = MagicMock()
+        mock_cdf_reader.read_all.return_value = mock_cdf_table
+
+        # Mock DeltaTable with load_cdf()
+        dt_mock = MagicMock()
+        dt_mock.load_cdf.return_value = mock_cdf_reader
+
+        reader = DeltaTableReader(auth)
+        with self._patch_reader(reader, dt_mock):
+            result = await reader.read_cdf("ws", "LH.Lakehouse", "customers")
+
+        assert result == mock_cdf_table
+        dt_mock.load_cdf.assert_called_once_with(starting_version=0)
+
+    @pytest.mark.asyncio()
+    async def test_read_cdf_version_range(self, auth):
+        """read_cdf passes starting_version and ending_version to load_cdf."""
+        mock_cdf_table = MagicMock()
+        mock_cdf_reader = MagicMock()
+        mock_cdf_reader.read_all.return_value = mock_cdf_table
+
+        dt_mock = MagicMock()
+        dt_mock.load_cdf.return_value = mock_cdf_reader
+
+        reader = DeltaTableReader(auth)
+        with self._patch_reader(reader, dt_mock):
+            result = await reader.read_cdf(
+                "ws", "LH.Lakehouse", "t", starting_version=5, ending_version=10
+            )
+
+        assert result == mock_cdf_table
+        dt_mock.load_cdf.assert_called_once_with(starting_version=5, ending_version=10)
+
+    @pytest.mark.asyncio()
+    async def test_read_cdf_not_enabled(self, auth):
+        """read_cdf propagates DeltaError when CDF is not enabled."""
+        dt_mock = MagicMock()
+        dt_mock.load_cdf.side_effect = DeltaError("Change data feed is not enabled for this table")
+
+        reader = DeltaTableReader(auth)
+        with (
+            self._patch_reader(reader, dt_mock),
+            pytest.raises(DeltaError, match="Change data feed is not enabled"),
+        ):
+            await reader.read_cdf("ws", "LH.Lakehouse", "t")
+
+    @pytest.mark.asyncio()
+    async def test_read_cdf_empty_result(self, auth):
+        """read_cdf handles empty CDF result gracefully."""
+        mock_cdf_table = MagicMock()
+        mock_cdf_table.num_rows = 0
+
+        mock_cdf_reader = MagicMock()
+        mock_cdf_reader.read_all.return_value = mock_cdf_table
+
+        dt_mock = MagicMock()
+        dt_mock.load_cdf.return_value = mock_cdf_reader
+
+        reader = DeltaTableReader(auth)
+        with self._patch_reader(reader, dt_mock):
+            result = await reader.read_cdf("ws", "LH.Lakehouse", "t")
+
+        assert result == mock_cdf_table
+        assert result.num_rows == 0
+
+    @pytest.mark.asyncio()
+    async def test_read_cdf_cdf_without_read_all(self, auth):
+        """read_cdf handles CDF objects without read_all() method."""
+        mock_cdf_table = MagicMock()
+        # Explicitly delete read_all to simulate objects without this method
+        del mock_cdf_table.read_all
+
+        # Simulate CDF reader that is already a table (no read_all method)
+        dt_mock = MagicMock()
+        dt_mock.load_cdf.return_value = mock_cdf_table
+
+        reader = DeltaTableReader(auth)
+        with self._patch_reader(reader, dt_mock):
+            result = await reader.read_cdf("ws", "LH.Lakehouse", "t")
+
+        assert result == mock_cdf_table
+
+
+# ── DeltaTableReader.list_files ─────────────────────────────────────────
+
+
+class TestListFiles:
+    """Test list_files method for listing data files."""
+
+    @pytest.fixture()
+    def auth(self):
+        from onelake_client.auth import OneLakeAuth
+        from tests.conftest import FakeCredential
+
+        return OneLakeAuth(credential=FakeCredential())
+
+    def _patch_reader(self, reader, dt_mock):
+        """Patch _load_table_sync to return our mock."""
+        reader._isolate = False
+        return patch.object(reader, "_load_table_sync", return_value=dt_mock)
+
+    @pytest.mark.asyncio()
+    async def test_list_files_returns_uris(self, auth):
+        """list_files returns file URIs from dt.file_uris()."""
+        file_uris = [
+            "abfss://ws@host/item/Tables/t/part-00000.parquet",
+            "abfss://ws@host/item/Tables/t/part-00001.parquet",
+            "abfss://ws@host/item/Tables/t/part-00002.parquet",
+        ]
+
+        dt_mock = MagicMock()
+        dt_mock.file_uris.return_value = file_uris
+
+        reader = DeltaTableReader(auth)
+        with self._patch_reader(reader, dt_mock):
+            result = await reader.list_files("ws", "LH.Lakehouse", "customers")
+
+        assert result == file_uris
+        assert len(result) == 3
+
+    @pytest.mark.asyncio()
+    async def test_list_files_empty(self, auth):
+        """list_files returns empty list when table has no files."""
+        dt_mock = MagicMock()
+        dt_mock.file_uris.return_value = []
+
+        reader = DeltaTableReader(auth)
+        with self._patch_reader(reader, dt_mock):
+            result = await reader.list_files("ws", "LH.Lakehouse", "t")
+
+        assert result == []
+        assert len(result) == 0

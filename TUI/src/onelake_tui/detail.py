@@ -192,7 +192,7 @@ class DetailPanel(VerticalScroll):
         self.mount(Label(f"🗃️ {data.table_name}", classes="detail-title"))
         friendly = f"onelake://{self._workspace_name}/{self._item_name}/Tables/{data.table_name}"
         self.mount(Static(f"[b]Path:[/b] {esc(friendly)}", classes="detail-section"))
-        self.mount(LoadingIndicator(id="table-spinner"))
+        self.mount(LoadingIndicator(classes="table-loading"))
         self._load_table_metadata(data)
 
     @work(exclusive=True, group="detail_load")
@@ -205,6 +205,28 @@ class DetailPanel(VerticalScroll):
                 data.item_path,
                 data.table_name,
             )
+            # Guard: verify _delta_log exists before calling deltalake.
+            # Schema folders (e.g. Tables/dbo) don't have _delta_log and
+            # the Rust FFI can panic instead of raising a Python exception.
+            delta_log_path = f"{data.item_path}/Tables/{data.table_name}/_delta_log"
+            try:
+                has_delta = await self.client.dfs.exists(data.workspace, delta_log_path)
+            except Exception as check_err:
+                logger.debug("Failed to check _delta_log existence: %s", check_err)
+                has_delta = True  # optimistic: try loading, let error handler catch it
+            if self._current_table_data is not data:
+                return
+            if not has_delta:
+                with contextlib.suppress(NoMatches):
+                    self.query_one(".table-loading").remove()
+                self.mount(
+                    Static(
+                        "[dim]Not a Delta table — this may be a schema folder. "
+                        "Expand the node in the tree to browse its tables.[/dim]",
+                        classes="detail-section",
+                    )
+                )
+                return
             info = await self.client.delta.get_metadata(
                 data.workspace, data.item_path, data.table_name
             )
@@ -214,7 +236,7 @@ class DetailPanel(VerticalScroll):
 
             # Remove loading spinner
             with contextlib.suppress(NoMatches):
-                self.query_one("#table-spinner").remove()
+                self.query_one(".table-loading").remove()
 
             # Build tabbed interface
             tc = TabbedContent(id="table-tabs")
@@ -304,7 +326,7 @@ class DetailPanel(VerticalScroll):
 
         except Exception as e:
             with contextlib.suppress(NoMatches):
-                self.query_one("#table-spinner").remove()
+                self.query_one(".table-loading").remove()
             err_msg = str(e)
             if "No files in log" in err_msg or "log segment" in err_msg:
                 self.mount(
@@ -602,7 +624,7 @@ class DetailPanel(VerticalScroll):
                 classes="detail-section",
             )
         )
-        self.mount(Static("Loading preview…", id="preview-loading", classes="detail-section"))
+        self.mount(Static("Loading preview…", classes="preview-loading detail-section"))
 
         try:
             is_binary = ext in (".parquet", ".avro")
@@ -635,12 +657,12 @@ class DetailPanel(VerticalScroll):
     def _remove_loading(self) -> None:
         """Remove the loading placeholder if present."""
         with contextlib.suppress(NoMatches):
-            self.query_one("#preview-loading", Static).remove()
+            self.query_one(".preview-loading", Static).remove()
 
     def _render_text(self, file_name: str, ext: str, text: str) -> None:
         """Render text content with appropriate formatting."""
         if ext == ".md":
-            self.mount(Markdown(text, id="preview-content"))
+            self.mount(Markdown(text, classes="preview-content"))
         elif ext == ".csv":
             self._render_csv(text)
         elif ext == ".json":
@@ -664,7 +686,7 @@ class DetailPanel(VerticalScroll):
                 if formatted:
                     text = "\n".join(formatted)
             # TextArea for selectable/copyable text
-            ta = TextArea(text, language="json", read_only=True, id="preview-content")
+            ta = TextArea(text, language="json", read_only=True, classes="preview-content")
             self.mount(ta)
         else:
             # Try to detect if it's binary
@@ -672,7 +694,7 @@ class DetailPanel(VerticalScroll):
                 self._render_hex(text.encode("utf-8", errors="replace")[:256])
             else:
                 lang = _SYNTAX_LEXERS.get(ext, "text") if ext in _SYNTAX_LEXERS else None
-                ta = TextArea(text, language=lang, read_only=True, id="preview-content")
+                ta = TextArea(text, language=lang, read_only=True, classes="preview-content")
                 self.mount(ta)
 
     def _render_csv(self, text: str) -> None:
@@ -683,7 +705,7 @@ class DetailPanel(VerticalScroll):
             if not rows:
                 self.mount(Static("(empty CSV)", classes="detail-section"))
                 return
-            table = DataTable(id="preview-content")
+            table = DataTable(classes="preview-content")
             self.mount(table)
             # Use first row as headers
             headers = rows[0]
@@ -733,7 +755,7 @@ class DetailPanel(VerticalScroll):
             # Sample data (first 100 rows)
             sample = pf.read_row_groups([0]).slice(0, 100)
             self.mount(Label("Data (first 100 rows)", classes="detail-title"))
-            data_table = DataTable(id="preview-content")
+            data_table = DataTable(classes="preview-content")
             self.mount(data_table)
             col_names = [schema.field(i).name for i in range(len(schema))]
             data_table.add_columns(*col_names)
@@ -816,7 +838,7 @@ class DetailPanel(VerticalScroll):
                     col_names = list(rows_data[0].keys())
 
                 self.mount(Label(f"Data (first {len(rows_data)} rows)", classes="detail-title"))
-                data_table = DataTable(id="preview-content")
+                data_table = DataTable(classes="preview-content")
                 self.mount(data_table)
                 data_table.add_columns(*col_names)
                 for record in rows_data:
@@ -849,7 +871,7 @@ class DetailPanel(VerticalScroll):
         self.mount(
             Static(
                 Syntax("\n".join(lines), "text", theme="monokai"),
-                id="preview-content",
+                classes="preview-content",
             )
         )
         self.mount(

@@ -65,6 +65,7 @@ class OneLakeApp(App):
     BINDINGS = [
         Binding("q", "quit", "Quit", priority=True),
         Binding("r", "refresh", "Refresh"),
+        Binding("S", "screenshot", "Screenshot", show=False),
         Binding("y", "copy_path", "Copy Path"),
         Binding("Y", "copy_abfss", "Copy ABFSS", show=False),
         Binding("ctrl+y", "copy_https", "Copy URL", show=False),
@@ -101,6 +102,7 @@ class OneLakeApp(App):
     @work(exclusive=True, group="auth_probe")
     async def _probe_auth(self) -> None:
         """Eagerly validate credentials before workspace loading begins."""
+        logger.debug("Auth probe starting")
         try:
             # Run blocking credential check in a thread to avoid freezing
             # the event loop (DefaultAzureCredential probes IMDS, CLI, etc.)
@@ -113,6 +115,20 @@ class OneLakeApp(App):
             self._show_auth_error(str(exc))
             return
         self.notify("Connecting to OneLake...", timeout=5)
+
+    @work(exclusive=True, group="identity_fallback")
+    async def _ensure_identity(self) -> None:
+        """Fallback: resolve identity if _probe_auth didn't set it."""
+        status = self.query_one(StatusBar)
+        if status.identity:
+            return
+        logger.debug("Identity fallback: resolving from cached token")
+        try:
+            identity = await asyncio.to_thread(self.client.auth.get_identity)
+            status.identity = identity
+            logger.info("Identity resolved via fallback: %s", identity)
+        except Exception:
+            logger.debug("Identity fallback failed", exc_info=True)
 
     def _show_auth_error(self, error: str) -> None:
         """Display a prominent auth error panel."""
@@ -155,6 +171,9 @@ class OneLakeApp(App):
         # Update status bar
         status = self.query_one(StatusBar)
         status.update_path(f"onelake://{ws.display_name}")
+        # Fallback: ensure identity is displayed (covers race with _probe_auth)
+        if not status.identity:
+            self._ensure_identity()
 
     def on_item_list_item_selected(self, event: ItemList.ItemSelected) -> None:
         """Load the selected item's DFS tree."""
@@ -221,9 +240,14 @@ class OneLakeApp(App):
         """Show keyboard shortcuts."""
         self.notify(
             "↑↓ Navigate  │  Enter Preview  │  / Search  │  r Refresh  │  q Quit\n"
-            "y Copy path  │  Y Copy ABFSS  │  Ctrl+Y Copy URL",
+            "y Copy path  │  Y Copy ABFSS  │  Ctrl+Y Copy URL  │  S Screenshot",
             timeout=10,
         )
+
+    def action_screenshot(self) -> None:
+        """Save an SVG screenshot to the current directory."""
+        path = self.save_screenshot()
+        self.notify(f"Screenshot saved: {path}", timeout=5)
 
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
         """Handle Enter on tree nodes — preview files."""
@@ -336,11 +360,26 @@ class OneLakeApp(App):
                 logger.exception("Error closing client during unmount")
 
 
+def _get_version() -> str:
+    """Get the package version from installed metadata."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("onelake-tui")
+    except PackageNotFoundError:
+        return "unknown"
+
+
 def run() -> None:
     """Entry point for the onelake-tui command."""
     parser = argparse.ArgumentParser(
         prog="onelake-tui",
         description="Terminal Explorer for Microsoft Fabric OneLake",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {_get_version()}",
     )
     parser.add_argument(
         "--env",

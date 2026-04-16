@@ -1,38 +1,50 @@
 # OneLake TUI (Unofficial)
 
-An unofficial terminal UI for browsing Microsoft Fabric workspaces, lakehouses, and Delta tables — built with [Textual](https://textual.textualize.io/).
+A terminal UI for browsing Microsoft Fabric workspaces, lakehouses, and Delta tables — right from your terminal. No portal, no notebooks, no Spark cluster required.
 
-<!-- TODO: Add screenshot -->
+```bash
+pip install onelake-tui
+az login
+onelake-tui
+```
+
+`onelake-tui` is the published PyPI package and currently bundles both the terminal UI and the `onelake_client` library.
+
+![OneLake TUI — browsing a Fabric lakehouse](https://raw.githubusercontent.com/lmoloney/OneLakeTools/main/docs/branding/TUI-Open.jpg)
+
+![Delta table detail view](https://raw.githubusercontent.com/lmoloney/OneLakeTools/main/docs/branding/Table-Detail.jpg)
+
+## What is this?
+
+OneLake TUI gives you a keyboard-driven file-manager experience for Microsoft Fabric's OneLake storage. Browse workspaces, inspect lakehouses and warehouses, preview files, and explore Delta table metadata — all without leaving the terminal.
+
+Built with [Textual](https://textual.textualize.io/) and an async Python client for the Fabric REST and OneLake DFS APIs.
 
 ## Features
 
 - **Three-panel layout** — workspace picker → item list → DFS file tree + detail/preview
-- **OneLake-inspired splash art** — animated startup logo with Fabric-styled shimmer
-- **Live search** — press `/` to filter workspaces instantly
-- **File preview** — Enter on any file for rich rendering:
-  - **Markdown** rendered natively
-  - **JSON** pretty-printed (handles NDJSON/Delta log format)
-  - **CSV** displayed as a DataTable
-  - **Parquet** schema + first 100 rows via pyarrow
-  - **Avro** schema + first 100 rows via fastavro
-  - **Code** syntax-highlighted (Python, SQL, YAML, etc.)
-  - All previews are **selectable/copyable** via TextArea
-- **Delta table metadata** — tabbed detail view:
-  - **Schema** tab — version, files, size, partitions, column DataTable
-  - **Data** tab — lazy-loaded first 100 rows (with deletionVectors fallback)
-  - **History** tab — transaction log from `_delta_log/*.json` with timestamps
-  - **CDF** tab — conditional, only shown when Change Data Feed is enabled
-- **Schema-aware table detection** — supports `Tables/schema/table` (mirrored DBs) and `Tables/table` (lakehouses)
-- **Expandable tables** — browse raw `_delta_log/`, parquet files, metadata
-- **Human-readable paths** — `onelake://workspace/item/path` everywhere
-- **Type-tagged items** with coloured badges (LH, WH, NB, RPT, MDB, etc.)
-- **3-line status bar** — path, keyboard shortcuts (always visible), auth/env info
-- **Multi-environment support** — PROD, MSIT, DXT, DAILY via `--env` flag
-- **Keyboard-driven** — zero-config, uses `az login`
+- **Rich file preview** — press Enter on any file:
+  - Markdown, JSON (NDJSON), CSV, Parquet, Avro, syntax-highlighted code
+  - All previews are selectable and copyable
+- **Delta table inspector** — tabbed detail view:
+  - Schema, data preview (first 100 rows), transaction history, Change Data Feed
+- **Schema-aware table detection** — handles both `Tables/schema/table` (mirrored DBs) and `Tables/table` (lakehouses)
+- **Live search** — press `/` to filter workspaces
+- **Multi-environment** — PROD, MSIT, DXT, DAILY via `--env` flag
+- **Human-readable paths** — `onelake://workspace/item/path` everywhere, with one-key copy (`y`, `Y`, `Ctrl+Y`)
+- **Zero config** — uses `az login`, no service keys or config files required
 
 ## Installation
 
-**Prerequisites:** Python 3.11+, [uv](https://docs.astral.sh/uv/), Azure CLI (`az login`)
+**Prerequisites:** Python 3.11+, Azure CLI (`az login`)
+
+```bash
+pip install onelake-tui    # from PyPI
+onelake-tui                # launch (PROD)
+onelake-tui --env msit     # Microsoft internal testing ring
+```
+
+**From source** (for development):
 
 ```bash
 cd TUI
@@ -42,14 +54,14 @@ uv run onelake-tui
 
 ## Quick Start
 
-1. **Authenticate** — run `az login` if you haven't already
-2. **Launch** — `uv run onelake-tui` (or `uv run onelake-tui --env msit` for internal environments)
-3. **Select workspace** — pick from the left panel, items load below
-4. **Select item** — click a lakehouse/warehouse/mirrored DB to load its DFS tree
-5. **Browse files** — expand folders in the tree (right panel)
-6. **Preview** — press Enter on any file to preview its contents
-7. **Explore tables** — expand `Tables/` to see schemas and Delta metadata
-8. **Search** — press `/` to filter workspaces, Escape to clear
+1. **Authenticate** — `az login` (if you haven't already)
+2. **Launch** — `onelake-tui`
+3. **Select workspace** — pick from the left panel
+4. **Select item** — choose a lakehouse, warehouse, or mirrored DB
+5. **Browse files** — expand folders in the tree
+6. **Preview** — press Enter on any file
+7. **Explore tables** — expand `Tables/` for Delta metadata
+8. **Search** — press `/` to filter workspaces
 
 ## Keybindings
 
@@ -132,7 +144,7 @@ tail -f ~/.onelake-tui/debug.log
 ```bash
 cd TUI
 uv sync --all-extras
-uv run pytest           # 43 unit + 6 integration tests
+uv run pytest           # 182 unit + 6 integration tests
 uv run ruff check src/  # Lint
 uv run ruff format src/ # Format
 ```

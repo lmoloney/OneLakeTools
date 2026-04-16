@@ -97,8 +97,10 @@ class OneLakeTree(Tree[NodeData]):
             self.root.add_leaf("(no file storage for this item type)", data=None)
             return
 
+        self.root.add_leaf("⏳ Loading...", data=None)
         try:
             paths = await self.client.dfs.list_paths(workspace_id, item.id)
+            self.root.remove_children()
             for p in sorted(paths, key=lambda x: (not x.is_directory, x.name.casefold())):
                 name = p.name.split("/")[-1] if "/" in p.name else p.name
                 if p.is_directory:
@@ -125,8 +127,10 @@ class OneLakeTree(Tree[NodeData]):
             if not paths:
                 self.root.add_leaf("(no files)", data=None)
         except NotFoundError:
+            self.root.remove_children()
             self.root.add_leaf("(no DFS storage for this item)", data=None)
         except Exception as e:
+            self.root.remove_children()
             self.root.add_leaf(f"❌ {e}", data=None)
             logger.exception("Failed to load DFS paths for %s", item.display_name)
             self.app.notify(f"Error loading paths: {e}", severity="error", timeout=20, markup=False)
