@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from textual.app import App, ComposeResult
@@ -11,10 +11,8 @@ from textual.widgets import DataTable, Markdown, Static, TextArea
 
 from onelake_client.environment import DEFAULT_ENVIRONMENT
 from onelake_tui.detail import (
-    DetailPanel,
-    _MAX_BINARY_BYTES,
     _MAX_PREVIEW_BYTES,
-    _format_size,
+    DetailPanel,
 )
 from onelake_tui.nodes import FileNode
 

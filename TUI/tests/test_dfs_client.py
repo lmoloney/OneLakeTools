@@ -110,7 +110,6 @@ async def test_exists_returns_false_on_404(httpx_mock, auth):
 
 async def test_read_file_stream_yields_chunks(httpx_mock, auth):
     """Test that read_file_stream yields chunks of data correctly."""
-    import httpx
 
     chunk1 = b"hello "
     chunk2 = b"world "

@@ -6,11 +6,11 @@ import time
 from unittest.mock import MagicMock, patch
 
 import pytest
+from azure.core.exceptions import ClientAuthenticationError
 
 from onelake_client.auth import OneLakeAuth, _CachedToken, _decode_jwt_claims, create_credential
 from onelake_client.environment import PROD
 from onelake_client.exceptions import AuthenticationError
-from azure.core.exceptions import ClientAuthenticationError
 
 from .conftest import FakeCredential
 

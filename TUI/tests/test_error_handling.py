@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -17,7 +17,7 @@ from deltalake.exceptions import DeltaError
 from onelake_client._http import paginate_dfs, paginate_fabric
 from onelake_client.dfs.client import DfsClient
 from onelake_client.environment import PROD
-from onelake_client.exceptions import ApiError, NotFoundError
+from onelake_client.exceptions import ApiError
 from onelake_client.tables.delta import _run_delta_subprocess
 
 BASE_URL = f"https://{PROD.dfs_host}"
@@ -229,8 +229,8 @@ class TestDeltaSubprocessErrors:
         mock_proc.communicate.return_value = ('{"ok": tr', "")
 
         # Patch at module level since it's imported inside the function
-        with patch("subprocess.Popen", return_value=mock_proc):
-            with pytest.raises(DeltaError, match="invalid output"):
+        with patch("subprocess.Popen", return_value=mock_proc), \
+                pytest.raises(DeltaError, match="invalid output"):
                 _run_delta_subprocess(
                     "abfss://ws@host/item/Tables/table",
                     {"storage_account": "account", "storage_access_key": "key"},
@@ -260,8 +260,8 @@ class TestDeltaSubprocessErrors:
         mock_proc.returncode = 1
         mock_proc.communicate.return_value = ("", "Import error: no module named deltalake")
 
-        with patch("subprocess.Popen", return_value=mock_proc):
-            with pytest.raises(DeltaError, match="exit code"):
+        with patch("subprocess.Popen", return_value=mock_proc), \
+                pytest.raises(DeltaError, match="exit code"):
                 _run_delta_subprocess(
                     "abfss://ws@host/item/Tables/table",
                     {"storage_account": "account"},
@@ -272,8 +272,8 @@ class TestDeltaSubprocessErrors:
         mock_proc = MagicMock()
         mock_proc.communicate.side_effect = subprocess.TimeoutExpired("cmd", 30)
 
-        with patch("subprocess.Popen", return_value=mock_proc):
-            with pytest.raises(DeltaError, match="timed out after 30s"):
+        with patch("subprocess.Popen", return_value=mock_proc), \
+                pytest.raises(DeltaError, match="timed out after 30s"):
                 _run_delta_subprocess(
                     "abfss://ws@host/item/Tables/table",
                     {"storage_account": "account"},
@@ -287,8 +287,8 @@ class TestDeltaSubprocessErrors:
         long_error = "Error: " + "x" * 400  # More than 300 char limit
         mock_proc.communicate.return_value = ("", long_error)
 
-        with patch("subprocess.Popen", return_value=mock_proc):
-            with pytest.raises(DeltaError, match="…"):  # Should contain truncation marker
+        with patch("subprocess.Popen", return_value=mock_proc), \
+                pytest.raises(DeltaError, match="…"):
                 _run_delta_subprocess(
                     "abfss://ws@host/item/Tables/table",
                     {"storage_account": "account"},
@@ -327,8 +327,8 @@ class TestDeltaSubprocessErrors:
         mock_proc.returncode = 1
         mock_proc.communicate.return_value = ("", "")  # No stderr output
 
-        with patch("subprocess.Popen", return_value=mock_proc):
-            with pytest.raises(DeltaError, match="exit code 1"):
+        with patch("subprocess.Popen", return_value=mock_proc), \
+                pytest.raises(DeltaError, match="exit code 1"):
                 _run_delta_subprocess(
                     "abfss://ws@host/item/Tables/table",
                     {"storage_account": "account"},

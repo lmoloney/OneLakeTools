@@ -332,6 +332,7 @@ async def test_show_table_schema_folder_fallback():
     DetailPanel should show a friendly 'Not a Delta table' message.
     """
     import asyncio
+
     from textual.widgets import Static
 
     client = _make_mock_client()
@@ -367,8 +368,10 @@ async def test_show_table_loads_metadata():
     DetailPanel should load metadata and mount a TabbedContent widget.
     """
     import asyncio
-    from onelake_client.models.table import Column, DeltaTableInfo
+
     from textual.widgets import TabbedContent
+
+    from onelake_client.models.table import Column, DeltaTableInfo
 
     client = _make_mock_client()
     client.dfs.exists = AsyncMock(return_value=True)
@@ -410,7 +413,7 @@ async def test_show_table_loads_metadata():
         except Exception as e:
             raise AssertionError(
                 f"Expected TabbedContent to be mounted in DetailPanel. Error: {e}"
-            )
+            ) from e
 
 
 @pytest.mark.asyncio
@@ -419,6 +422,7 @@ async def test_show_folder_renders_path():
     the folder icon, name, and path.
     """
     import asyncio
+
     from textual.widgets import Label, Static
 
     client = _make_mock_client()
@@ -459,7 +463,9 @@ async def test_show_file_renders_size():
     the file icon, name, path, and size.
     """
     import asyncio
+
     from textual.widgets import Label, Static
+
     from onelake_tui.nodes import FileNode
 
     client = _make_mock_client()

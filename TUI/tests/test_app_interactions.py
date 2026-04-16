@@ -6,13 +6,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from textual.app import App
+from textual.widgets import Input
 
 from onelake_client.environment import DEFAULT_ENVIRONMENT
-from onelake_client.models import Item, Workspace
+from onelake_client.models import Item
 from onelake_tui.app import OneLakeApp
 from onelake_tui.nodes import FileNode, FolderNode, TableNode
 from onelake_tui.tree import OneLakeTree
-from textual.widgets import Input
 
 # ── Helpers ──────────────────────────────────────────────────────────
 

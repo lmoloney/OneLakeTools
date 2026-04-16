@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic import ValidationError
@@ -13,7 +13,6 @@ from onelake_client.models import Item, PathInfo, Workspace
 from onelake_tui.detail import DetailPanel
 from onelake_tui.nodes import FileNode, FolderNode, TableNode
 from onelake_tui.status_bar import StatusBar
-
 
 # ── Model robustness tests ───────────────────────────────────────────
 
@@ -53,7 +52,6 @@ def test_api_response_wrong_type():
     Pydantic v2 is strict about types and does NOT coerce int → str
     for string fields by default. This test verifies the rejection.
     """
-    from pydantic import ValidationError
     
     # Pydantic rejects the wrong type
     with pytest.raises(ValidationError) as exc_info:
