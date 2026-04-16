@@ -304,6 +304,44 @@ class TestGetMetadata:
         uri = call_args[0][0]
         assert MSIT.dfs_host in uri
 
+    @pytest.mark.asyncio()
+    async def test_subprocess_path_used_by_default(self, auth):
+        """Default get_metadata path uses subprocess isolation output."""
+        reader = DeltaTableReader(auth)
+        fake_result = {
+            "ok": True,
+            "name": "subproc_table",
+            "columns": [{"name": "id", "type": "long", "nullable": False, "metadata": None}],
+            "version": 9,
+            "num_files": 4,
+            "size_bytes": 1234,
+            "partition_columns": ["pcol"],
+            "properties": {"delta.appendOnly": "true"},
+            "description": "from subprocess",
+        }
+        with patch("onelake_client.tables.delta._run_delta_subprocess", return_value=fake_result):
+            info = await reader.get_metadata("ws", "item", "subproc_table")
+
+        assert info.name == "subproc_table"
+        assert info.version == 9
+        assert info.num_files == 4
+        assert info.size_bytes == 1234
+        assert info.partition_columns == ["pcol"]
+        assert info.properties == {"delta.appendOnly": "true"}
+
+    @pytest.mark.asyncio()
+    async def test_subprocess_error_payload_raises_delta_error(self, auth):
+        """ok=False payload from subprocess is raised as DeltaError."""
+        reader = DeltaTableReader(auth)
+        with (
+            patch(
+                "onelake_client.tables.delta._run_delta_subprocess",
+                return_value={"ok": False, "error": "DeltaError: boom"},
+            ),
+            pytest.raises(DeltaError, match="boom"),
+        ):
+            await reader.get_metadata("ws", "item", "t")
+
 
 # ── Size computation error handling ─────────────────────────────────────
 
