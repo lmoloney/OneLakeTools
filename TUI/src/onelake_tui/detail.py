@@ -149,7 +149,7 @@ class DetailPanel(VerticalScroll):
         folder_name = data.directory.split("/")[-1] if "/" in data.directory else data.directory
         self.mount(Label(f"📂 {folder_name}", classes="detail-title"))
         rel = data.directory.split("/", 1)[-1] if "/" in data.directory else data.directory
-        friendly = f"onelake://{self._workspace_name}/{self._item_name}/{rel}"
+        friendly = f"{self._workspace_name} / {self._item_name} / {rel}"
         self.mount(Static(f"[b]Path:[/b] {esc(friendly)}", classes="detail-section"))
 
     def _show_file(self, data: FileNode) -> None:
@@ -157,7 +157,7 @@ class DetailPanel(VerticalScroll):
         file_name = data.path.split("/")[-1]
         self.mount(Label(f"📄 {file_name}", classes="detail-title"))
         rel = data.path.split("/", 1)[-1] if "/" in data.path else data.path
-        friendly = f"onelake://{self._workspace_name}/{self._item_name}/{rel}"
+        friendly = f"{self._workspace_name} / {self._item_name} / {rel}"
         self.mount(Static(f"[b]Path:[/b] {esc(friendly)}", classes="detail-section"))
         self.mount(Static(f"[b]Size:[/b] {_format_size(data.size)}", classes="detail-section"))
         self._load_file_properties(data)
@@ -190,7 +190,7 @@ class DetailPanel(VerticalScroll):
         self._clear()
         self._current_table_data = data
         self.mount(Label(f"🗃️ {data.table_name}", classes="detail-title"))
-        friendly = f"onelake://{self._workspace_name}/{self._item_name}/Tables/{data.table_name}"
+        friendly = f"{self._workspace_name} / {self._item_name} / Tables / {data.table_name}"
         self.mount(Static(f"[b]Path:[/b] {esc(friendly)}", classes="detail-section"))
         self.mount(LoadingIndicator(classes="table-loading"))
         self._load_table_metadata(data)
@@ -617,7 +617,7 @@ class DetailPanel(VerticalScroll):
         ext = ("." + file_name.rsplit(".", 1)[-1]).lower() if "." in file_name else ""
         self.mount(Label(f"👁 Preview: {file_name}", classes="detail-title"))
         rel = data.path.split("/", 1)[-1] if "/" in data.path else data.path
-        friendly = f"onelake://{self._workspace_name}/{self._item_name}/{rel}"
+        friendly = f"{self._workspace_name} / {self._item_name} / {rel}"
         self.mount(
             Static(
                 f"[b]Path:[/b] {esc(friendly)}  │  [b]Size:[/b] {_format_size(data.size)}",

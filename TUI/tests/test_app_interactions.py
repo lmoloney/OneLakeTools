@@ -114,7 +114,7 @@ async def test_action_help_notifies():
 
 @pytest.mark.asyncio
 async def test_copy_path_no_selection():
-    """Mount app. Call action_copy_path() with no tree selection.
+    """Mount app. Call action_copy() with no tree selection.
     Should show a warning notification without crashing.
     """
     app, _ = _create_app_harness()
@@ -126,8 +126,8 @@ async def test_copy_path_no_selection():
         # Verify tree has no cursor node selected
         assert tree.cursor_node is None or tree.cursor_node.data is None
 
-        # Call action_copy_path — should show warning but not crash
-        app.action_copy_path()
+        # Call action_copy — should show warning but not crash
+        app.action_copy()
         await pilot.pause()
 
 
@@ -136,8 +136,8 @@ async def test_copy_path_no_selection():
 
 @pytest.mark.asyncio
 async def test_node_to_path_folder():
-    """Mount app. Set tree context. Convert FolderNode to path.
-    Verify format: onelake://WsName/ItemName/relative/path
+    """Mount app. Set tree context. Convert FolderNode to display path.
+    Verify format: WsName / ItemName / relative/path
     """
     app, _ = _create_app_harness()
 
@@ -161,8 +161,8 @@ async def test_node_to_path_folder():
             directory="item-guid/Files/subfolder",  # item GUID prefix should be stripped
         )
 
-        result = app._node_to_path(folder_node)
-        assert result == "onelake://MyWorkspace/MyLakehouse/Files/subfolder"
+        result = app._node_display_path(folder_node)
+        assert result == "MyWorkspace / MyLakehouse / Files/subfolder"
 
 
 # ── 6. test_node_to_path_file ────────────────────────────────────────
@@ -170,8 +170,8 @@ async def test_node_to_path_folder():
 
 @pytest.mark.asyncio
 async def test_node_to_path_file():
-    """Mount app. Set tree context. Convert FileNode to path.
-    Verify format: onelake://WsName/ItemName/path/to/file
+    """Mount app. Set tree context. Convert FileNode to display path.
+    Verify format: WsName / ItemName / path/to/file
     """
     app, _ = _create_app_harness()
 
@@ -195,8 +195,8 @@ async def test_node_to_path_file():
             size=2048,
         )
 
-        result = app._node_to_path(file_node)
-        assert result == "onelake://MyWorkspace/MyLakehouse/Files/data.csv"
+        result = app._node_display_path(file_node)
+        assert result == "MyWorkspace / MyLakehouse / Files/data.csv"
 
 
 # ── 7. test_node_to_path_table ───────────────────────────────────────
@@ -204,8 +204,8 @@ async def test_node_to_path_file():
 
 @pytest.mark.asyncio
 async def test_node_to_path_table():
-    """Mount app. Set tree context. Convert TableNode to path.
-    Verify format includes Tables/: onelake://WsName/ItemName/Tables/table_name
+    """Mount app. Set tree context. Convert TableNode to display path.
+    Verify format: WsName / ItemName / Tables / table_name
     """
     app, _ = _create_app_harness()
 
@@ -229,8 +229,8 @@ async def test_node_to_path_table():
             table_name="dbo/my_table",
         )
 
-        result = app._node_to_path(table_node)
-        assert result == "onelake://MyWorkspace/MyLakehouse/Tables/dbo/my_table"
+        result = app._node_display_path(table_node)
+        assert result == "MyWorkspace / MyLakehouse / Tables / dbo/my_table"
 
 
 # ── 8. test_node_to_abfss_folder ────────────────────────────────────
@@ -262,7 +262,7 @@ async def test_node_to_abfss_folder():
             directory="item-guid/Files/subfolder",
         )
 
-        result = app._node_to_abfss(folder_node)
+        result = app._node_to_abfss_guid(folder_node)
         host = DEFAULT_ENVIRONMENT.dfs_host
         assert result == f"abfss://ws-guid-123@{host}/item-guid/Files/subfolder"
 
@@ -296,7 +296,7 @@ async def test_node_to_https_file():
             size=2048,
         )
 
-        result = app._node_to_https(file_node)
+        result = app._node_to_https_guid(file_node)
         host = DEFAULT_ENVIRONMENT.dfs_host
         assert result == f"https://{host}/ws-guid-123/item-guid/Files/data.csv"
 
@@ -306,7 +306,7 @@ async def test_node_to_https_file():
 
 @pytest.mark.asyncio
 async def test_node_to_path_none_data():
-    """Mount app. Call _node_to_path() with unsupported data type.
+    """Mount app. Call _node_display_path() with unsupported data type.
     Verify it returns None without crashing.
     """
     app, _ = _create_app_harness()
@@ -315,15 +315,15 @@ async def test_node_to_path_none_data():
         await pilot.pause()
 
         # Call with unsupported type
-        result = app._node_to_path("unsupported")
+        result = app._node_display_path("unsupported")
         assert result is None
 
         # Also test with an integer
-        result = app._node_to_path(42)
+        result = app._node_display_path(42)
         assert result is None
 
         # Test with None
-        result = app._node_to_path(None)
+        result = app._node_display_path(None)
         assert result is None
 
 
@@ -371,7 +371,7 @@ async def test_node_to_https_table():
             table_name="dbo/my_table",
         )
 
-        result = app._node_to_https(table_node)
+        result = app._node_to_https_guid(table_node)
         host = DEFAULT_ENVIRONMENT.dfs_host
         assert result == f"https://{host}/ws-guid-123/item-guid/Tables/dbo/my_table"
 
@@ -402,7 +402,7 @@ async def test_node_to_abfss_file():
             size=2048,
         )
 
-        result = app._node_to_abfss(file_node)
+        result = app._node_to_abfss_guid(file_node)
         host = DEFAULT_ENVIRONMENT.dfs_host
         assert result == f"abfss://ws-guid-123@{host}/item-guid/Files/data.csv"
 
@@ -433,6 +433,6 @@ async def test_node_to_abfss_table():
             table_name="dbo/my_table",
         )
 
-        result = app._node_to_abfss(table_node)
+        result = app._node_to_abfss_guid(table_node)
         host = DEFAULT_ENVIRONMENT.dfs_host
         assert result == f"abfss://ws-guid-123@{host}/item-guid/Tables/dbo/my_table"

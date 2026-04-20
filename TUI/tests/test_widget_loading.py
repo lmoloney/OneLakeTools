@@ -90,7 +90,7 @@ async def test_status_bar_update_path():
         await pilot.pause()
         status = app.query_one("#status", StatusBar)
 
-        new_path = "onelake://MyWS/MyLH"
+        new_path = "MyWS / MyLH"
         status.update_path(new_path)
 
         # Verify the path property was updated
@@ -109,7 +109,7 @@ async def test_status_bar_long_path_truncated():
         status = app.query_one("#status", StatusBar)
 
         # Create a long path (>80 chars)
-        long_path = "onelake://" + "a" * 200
+        long_path = "a" * 200
         status.path = long_path
 
         output = status.render()
@@ -304,7 +304,7 @@ async def test_status_bar_item_count_display():
         await pilot.pause()
         status = app.query_one("#status", StatusBar)
 
-        status.update_path("onelake://ws/item", item_count=42)
+        status.update_path("ws / item", item_count=42)
 
         output = status.render()
 
