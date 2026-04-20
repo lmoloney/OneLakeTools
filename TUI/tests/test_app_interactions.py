@@ -618,6 +618,34 @@ async def test_guid_uri_builders_use_node_workspace_id():
 
 
 @pytest.mark.asyncio
+async def test_guid_uri_builders_encode_special_characters():
+    """GUID URI builders should percent-encode unsafe chars in data path segments."""
+    app, _ = _create_app_harness()
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        file_node = FileNode(
+            workspace="ws-guid-123",
+            path="item-guid/Files/raw data/file #1.csv",
+            size=1,
+        )
+        table_node = TableNode(
+            workspace="ws-guid-123",
+            item_path="item-guid",
+            table_name="dbo/my table#1",
+        )
+
+        host = DEFAULT_ENVIRONMENT.dfs_host
+        assert app._node_to_https_guid(file_node) == (
+            f"https://{host}/ws-guid-123/item-guid/Files/raw%20data/file%20%231.csv"
+        )
+        assert app._node_to_abfss_guid(table_node) == (
+            f"abfss://ws-guid-123@{host}/item-guid/Tables/dbo/my%20table%231"
+        )
+
+
+@pytest.mark.asyncio
 async def test_copy_to_clipboard_uses_platform_command():
     """macOS path should use pbcopy command."""
     app, _ = _create_app_harness()
