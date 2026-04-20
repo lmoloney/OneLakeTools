@@ -31,7 +31,9 @@ Built with [Textual](https://textual.textualize.io/) and an async Python client 
 - **Schema-aware table detection** — handles both `Tables/schema/table` (mirrored DBs) and `Tables/table` (lakehouses)
 - **Live search** — press `/` to filter workspaces
 - **Multi-environment** — PROD, MSIT, DXT, DAILY via `--env` flag
-- **Human-readable paths** — `onelake://workspace/item/path` everywhere, with one-key copy (`y`, `Y`, `Ctrl+Y`)
+- **Copy menu** — press `y` to choose HTTPS/ABFSS + named/GUID URI formats
+- **Vim-friendly navigation** — `j/k/g/G` + `h/l`, with `Tab`/`Shift+Tab` still supported
+- **Toggleable footer** — `Ctrl+F` hides/shows the status bar
 - **Zero config** — uses `az login`, no service keys or config files required
 
 ## Installation
@@ -68,14 +70,16 @@ uv run onelake-tui
 | Key | Action |
 |-----|--------|
 | `↑` / `↓` | Navigate |
+| `j` / `k` | Navigate (vim-style) |
+| `g` / `G` | Jump to top / bottom |
 | `←` / `→` | Collapse/expand tree nodes |
 | `Enter` | Preview file / Expand folder |
 | `/` | Search/filter workspaces |
 | `Escape` | Close search / go back |
+| `h` / `l` | Previous/next panel |
 | `Tab` / `Shift+Tab` | Switch panels |
-| `y` | Copy `onelake://` path to clipboard |
-| `Y` (Shift) | Copy `abfss://` GUID path to clipboard |
-| `Ctrl+Y` | Copy `https://` DFS URL to clipboard |
+| `y` | Open copy menu (HTTPS/ABFSS, named/GUID) |
+| `Ctrl+F` | Toggle footer visibility |
 | `r` | Refresh |
 | `?` | Show help |
 | `q` | Quit |
@@ -144,7 +148,7 @@ tail -f ~/.onelake-tui/debug.log
 ```bash
 cd TUI
 uv sync --all-extras
-uv run pytest           # 182 unit + 6 integration tests
+uv run pytest           # Unit + integration tests
 uv run ruff check src/  # Lint
 uv run ruff format src/ # Format
 ```

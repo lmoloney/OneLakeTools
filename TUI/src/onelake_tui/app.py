@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import platform
 import subprocess
 from pathlib import Path
 
@@ -301,11 +302,38 @@ class OneLakeApp(App):
 
     def _copy_to_clipboard(self, text: str, label: str) -> None:
         """Copy text to clipboard and show notification."""
-        try:
-            subprocess.run(["pbcopy"], input=text.encode(), check=True)
-            self.notify(f"Copied {label}: {text}", timeout=3)
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            self.notify(f"{label}: {text}", timeout=5)
+        system = platform.system()
+        commands: list[list[str]]
+        if system == "Darwin":
+            commands = [["pbcopy"]]
+        elif system == "Windows":
+            commands = [["clip.exe"]]
+        elif system == "Linux":
+            commands = [
+                ["wl-copy"],
+                ["xclip", "-selection", "clipboard"],
+                ["xsel", "--clipboard", "--input"],
+            ]
+        else:
+            commands = []
+
+        for command in commands:
+            try:
+                subprocess.run(command, input=text.encode(), check=True)
+                self.notify(f"Copied {label}: {text}", timeout=3)
+                return
+            except FileNotFoundError:
+                continue
+            except subprocess.CalledProcessError as exc:
+                logger.debug("Clipboard command failed (%s): %s", " ".join(command), exc)
+
+        self.notify(f"{label}: {text}", timeout=5)
+
+    @staticmethod
+    def _relative_item_path(path: str) -> str:
+        """Strip item prefix from a DFS path for display or named URIs."""
+        normalized = path.rstrip("/")
+        return normalized.split("/", 1)[-1] if "/" in normalized else normalized
 
     def action_copy(self) -> None:
         """Open copy-format menu and copy the selected URI to clipboard."""
@@ -340,10 +368,10 @@ class OneLakeApp(App):
         item_name = tree._current_item.display_name if tree._current_item else "?"
 
         if isinstance(data, FolderNode):
-            rel = data.directory.split("/", 1)[-1] if "/" in data.directory else data.directory
+            rel = self._relative_item_path(data.directory)
             return f"{ws_name} / {item_name} / {rel}"
         elif isinstance(data, FileNode):
-            rel = data.path.split("/", 1)[-1] if "/" in data.path else data.path
+            rel = self._relative_item_path(data.path)
             return f"{ws_name} / {item_name} / {rel}"
         elif isinstance(data, TableNode):
             return f"{ws_name} / {item_name} / Tables / {data.table_name}"
@@ -351,16 +379,18 @@ class OneLakeApp(App):
 
     def _node_to_https_named(self, data: object) -> str | None:
         """Build an HTTPS DFS URL using workspace/item display names."""
+        if self.client is None:
+            return None
         tree = self.query_one("#tree", OneLakeTree)
         ws_name = tree._current_workspace_name or "?"
         item_name = tree._current_item.display_name if tree._current_item else "?"
         host = self.client.env.dfs_host
 
         if isinstance(data, FolderNode):
-            rel = data.directory.split("/", 1)[-1] if "/" in data.directory else data.directory
+            rel = self._relative_item_path(data.directory)
             return f"https://{host}/{ws_name}/{item_name}/{rel}"
         elif isinstance(data, FileNode):
-            rel = data.path.split("/", 1)[-1] if "/" in data.path else data.path
+            rel = self._relative_item_path(data.path)
             return f"https://{host}/{ws_name}/{item_name}/{rel}"
         elif isinstance(data, TableNode):
             return f"https://{host}/{ws_name}/{item_name}/Tables/{data.table_name}"
@@ -368,6 +398,8 @@ class OneLakeApp(App):
 
     def _node_to_https_guid(self, data: object) -> str | None:
         """Build an HTTPS DFS URL using GUIDs."""
+        if self.client is None:
+            return None
         tree = self.query_one("#tree", OneLakeTree)
         ws_id = tree._current_workspace_id
         host = self.client.env.dfs_host
@@ -382,16 +414,18 @@ class OneLakeApp(App):
 
     def _node_to_abfss_named(self, data: object) -> str | None:
         """Build an abfss:// URI using workspace/item display names."""
+        if self.client is None:
+            return None
         tree = self.query_one("#tree", OneLakeTree)
         ws_name = tree._current_workspace_name or "?"
         item_name = tree._current_item.display_name if tree._current_item else "?"
         host = self.client.env.dfs_host
 
         if isinstance(data, FolderNode):
-            rel = data.directory.split("/", 1)[-1] if "/" in data.directory else data.directory
+            rel = self._relative_item_path(data.directory)
             return f"abfss://{ws_name}@{host}/{item_name}/{rel}"
         elif isinstance(data, FileNode):
-            rel = data.path.split("/", 1)[-1] if "/" in data.path else data.path
+            rel = self._relative_item_path(data.path)
             return f"abfss://{ws_name}@{host}/{item_name}/{rel}"
         elif isinstance(data, TableNode):
             return f"abfss://{ws_name}@{host}/{item_name}/Tables/{data.table_name}"
@@ -399,6 +433,8 @@ class OneLakeApp(App):
 
     def _node_to_abfss_guid(self, data: object) -> str | None:
         """Build an abfss:// URI using GUIDs."""
+        if self.client is None:
+            return None
         tree = self.query_one("#tree", OneLakeTree)
         ws_id = tree._current_workspace_id
         host = self.client.env.dfs_host

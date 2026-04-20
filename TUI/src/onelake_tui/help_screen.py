@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Static
 
@@ -48,22 +48,23 @@ class HelpScreen(ModalScreen[None]):
 
     DEFAULT_CSS = """
     HelpScreen {
-        align: center middle;
+        background: $surface 70%;
     }
-    HelpScreen > Vertical {
-        width: 50;
-        height: auto;
-        max-height: 90%;
+    HelpScreen #help-root {
+        width: 1fr;
+        height: 1fr;
         background: $surface;
-        border: tall $primary;
         padding: 1 3;
     }
     HelpScreen .help-title {
         width: 100%;
-        text-align: center;
+        text-align: left;
         text-style: bold;
         color: $primary;
         margin-bottom: 1;
+    }
+    HelpScreen .help-scroll {
+        height: 1fr;
     }
     HelpScreen .help-body {
         width: 100%;
@@ -71,9 +72,10 @@ class HelpScreen(ModalScreen[None]):
     """
 
     def compose(self) -> ComposeResult:
-        with Vertical():
+        with Vertical(id="help-root"):
             yield Static("⌨️  Keyboard Shortcuts", classes="help-title")
-            yield Static(_HELP_TEXT, classes="help-body")
+            with VerticalScroll(classes="help-scroll"):
+                yield Static(_HELP_TEXT, classes="help-body")
 
     def action_dismiss_help(self) -> None:
         self.dismiss(None)

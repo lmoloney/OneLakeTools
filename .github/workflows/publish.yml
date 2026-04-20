@@ -23,6 +23,15 @@ jobs:
       - name: Install Python
         run: uv python install 3.13
 
+      - name: Install dependencies
+        run: cd TUI && uv sync --extra dev
+
+      - name: Lint
+        run: cd TUI && uv run ruff check src/ tests/
+
+      - name: Run unit tests
+        run: cd TUI && uv run pytest tests/ -x -q --ignore=tests/integration/
+
       - name: Build wheel and sdist
         run: cd TUI && uv build
 

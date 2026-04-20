@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -11,7 +12,9 @@ from textual.widgets import Input
 from onelake_client.environment import DEFAULT_ENVIRONMENT
 from onelake_client.models import Item
 from onelake_tui.app import OneLakeApp
+from onelake_tui.help_screen import HelpScreen
 from onelake_tui.nodes import FileNode, FolderNode, TableNode
+from onelake_tui.status_bar import StatusBar
 from onelake_tui.tree import OneLakeTree
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -93,20 +96,24 @@ async def test_action_search_escape_hides():
         assert search.display is False
 
 
-# ── 3. test_action_help_notifies ─────────────────────────────────────
+# ── 3. test_action_help_opens_fullscreen ─────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_action_help_notifies():
-    """Mount app. Call action_help(). Verify it triggers a notification without crashing."""
+async def test_action_help_opens_fullscreen():
+    """Mount app. Help action should push HelpScreen and close with Escape."""
     app, _ = _create_app_harness()
 
     async with app.run_test() as pilot:
         await pilot.pause()
 
-        # Should not raise
         app.action_help()
         await pilot.pause()
+        assert isinstance(app.screen, HelpScreen)
+
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, HelpScreen)
 
 
 # ── 4. test_copy_path_no_selection ───────────────────────────────────
@@ -436,3 +443,157 @@ async def test_node_to_abfss_table():
         result = app._node_to_abfss_guid(table_node)
         host = DEFAULT_ENVIRONMENT.dfs_host
         assert result == f"abfss://ws-guid-123@{host}/item-guid/Tables/dbo/my_table"
+
+
+@pytest.mark.asyncio
+async def test_action_toggle_footer_toggles_display():
+    """Status bar display should toggle on each action call."""
+    app, _ = _create_app_harness()
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        status = app.query_one(StatusBar)
+        assert status.display is True
+
+        app.action_toggle_footer()
+        assert status.display is False
+
+        app.action_toggle_footer()
+        assert status.display is True
+
+
+@pytest.mark.asyncio
+async def test_ctrl_f_key_toggles_footer():
+    """Ctrl+f binding exists and footer action toggles visibility."""
+    app, _ = _create_app_harness()
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        status = app.query_one(StatusBar)
+        assert status.display is True
+
+        assert any(binding.key == "ctrl+f" for binding in app.BINDINGS)
+
+        app.action_toggle_footer()
+        assert status.display is False
+
+
+@pytest.mark.asyncio
+async def test_on_key_panel_shortcuts_call_focus_actions():
+    """h/l shortcuts should call focus previous/next actions."""
+    app, _ = _create_app_harness()
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.query_one("#tree", OneLakeTree).focus()
+        await pilot.pause()
+
+        with (
+            patch.object(app, "action_focus_previous") as focus_prev,
+            patch.object(app, "action_focus_next") as focus_next,
+        ):
+            left_event = SimpleNamespace(key="h", prevent_default=MagicMock())
+            app.on_key(left_event)
+            focus_prev.assert_called_once()
+            left_event.prevent_default.assert_called_once()
+
+            right_event = SimpleNamespace(key="l", prevent_default=MagicMock())
+            app.on_key(right_event)
+            focus_next.assert_called_once()
+            right_event.prevent_default.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_on_key_vim_nav_shortcuts_map_to_simulate_key():
+    """j/k/g/G should map to down/up/home/end on focused nav widgets."""
+    app, _ = _create_app_harness()
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.query_one("#tree", OneLakeTree).focus()
+        await pilot.pause()
+
+        with patch.object(app, "simulate_key") as simulate_key:
+            for key, expected in (("j", "down"), ("k", "up"), ("g", "home"), ("G", "end")):
+                event = SimpleNamespace(key=key, prevent_default=MagicMock())
+                app.on_key(event)
+                simulate_key.assert_called_with(expected)
+                event.prevent_default.assert_called_once()
+                simulate_key.reset_mock()
+
+
+@pytest.mark.asyncio
+async def test_on_key_vim_nav_ignored_while_search_focused():
+    """j/k/g/G shortcuts should not fire while typing in search input."""
+    app, _ = _create_app_harness()
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.action_search()
+        await pilot.pause()
+
+        with patch.object(app, "simulate_key") as simulate_key:
+            event = SimpleNamespace(key="j", prevent_default=MagicMock())
+            app.on_key(event)
+            simulate_key.assert_not_called()
+            event.prevent_default.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_uri_builders_return_none_without_client():
+    """Path builders should safely return None when app client is unavailable."""
+    app, _ = _create_app_harness()
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        tree = app.query_one("#tree", OneLakeTree)
+        tree._current_workspace_name = "MyWorkspace"
+        tree._current_workspace_id = "ws-guid-123"
+        tree._current_item = Item(id="item-guid", display_name="MyLakehouse", type="Lakehouse")
+
+        file_node = FileNode(workspace="ws-guid-123", path="item-guid/Files/data.csv", size=1)
+        app.client = None
+
+        assert app._node_to_https_named(file_node) is None
+        assert app._node_to_https_guid(file_node) is None
+        assert app._node_to_abfss_named(file_node) is None
+        assert app._node_to_abfss_guid(file_node) is None
+
+
+@pytest.mark.asyncio
+async def test_copy_to_clipboard_uses_platform_command():
+    """macOS path should use pbcopy command."""
+    app, _ = _create_app_harness()
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        with (
+            patch("onelake_tui.app.platform.system", return_value="Darwin"),
+            patch("onelake_tui.app.subprocess.run") as run,
+            patch.object(app, "notify") as notify,
+        ):
+            app._copy_to_clipboard("abc", "TEST")
+            run.assert_called_once_with(["pbcopy"], input=b"abc", check=True)
+            notify.assert_called_with("Copied TEST: abc", timeout=3)
+
+
+@pytest.mark.asyncio
+async def test_copy_to_clipboard_linux_fallback_chain():
+    """Linux path should try wl-copy, then xclip, then xsel."""
+    app, _ = _create_app_harness()
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        side_effects = [
+            FileNotFoundError("wl-copy missing"),
+            FileNotFoundError("xclip missing"),
+            None,
+        ]
+        with (
+            patch("onelake_tui.app.platform.system", return_value="Linux"),
+            patch("onelake_tui.app.subprocess.run", side_effect=side_effects) as run,
+            patch.object(app, "notify") as notify,
+        ):
+            app._copy_to_clipboard("abc", "TEST")
+            assert run.call_count == 3
+            notify.assert_called_with("Copied TEST: abc", timeout=3)

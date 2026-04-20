@@ -19,6 +19,7 @@ Regenerate with:
 from __future__ import annotations
 
 import re
+from importlib.metadata import PackageNotFoundError, version
 
 from textual.widgets import Static
 
@@ -102,6 +103,11 @@ _WORDMARK_LINES = [
     " ╚═════╝ ╚═╝  ╚═══╝╚══════╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝",
 ]
 
+try:
+    _APP_VERSION = version("onelake-tui")
+except PackageNotFoundError:
+    _APP_VERSION = "dev"
+
 _WORDMARK_WIDTH = max(len(ln) for ln in _WORDMARK_LINES)
 _SHIMMER_COLOR = "#E8F4FD"
 _SHIMMER_BAND = 8
@@ -181,7 +187,7 @@ def _build_welcome(shimmer_col: int | None = None) -> RenderableType:
     right[start + 9] = "[dim]Community-built terminal UI[/]"
     right[start + 10] = "[dim]for Microsoft Fabric OneLake[/]"
     right[start + 11] = "[dim]Not affiliated with Microsoft[/]"
-    right[start + 12] = "[dim]v0.1.0[/]"
+    right[start + 12] = f"[dim]v{_APP_VERSION}[/]"
 
     tbl = Table(
         show_header=False,
@@ -197,9 +203,8 @@ def _build_welcome(shimmer_col: int | None = None) -> RenderableType:
         tbl.add_row(_SPRITE_LINES[i], right[i])
 
     hints = Text.from_markup(
-        "\n  [dim]↑↓ Navigate  │  Enter Expand  │  / Search[/]"
-        "\n  [dim]Tab Switch panels  │  y Copy path"
-        "  │  Y ABFSS  │  ^Y URL  │  ? Help[/]\n"
+        "\n  [dim]↑↓ or j/k Navigate  │  Enter Expand  │  / Search[/]"
+        "\n  [dim]Tab/h/l Panels  │  g/G Top/Bottom  │  y Copy menu  │  ? Help[/]\n"
     )
 
     return Group(tbl, hints)
