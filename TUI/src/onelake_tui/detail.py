@@ -566,7 +566,9 @@ class DetailPanel(VerticalScroll):
         if not parquet_files:
             raise FileNotFoundError("No parquet files found in table directory")
 
-        # Prefer larger known-size parquet files first, then unknown-size files.
+        # Prefer known-size parquet files first (largest to smallest), then unknown-size files.
+        # Tuple sort key is `(has_known_size, size_or_zero)` with `reverse=True`, so `True`
+        # (known size, even when zero) sorts before `False` (unknown size / None).
         parquet_files.sort(
             key=lambda p: (p.content_length is not None, p.content_length or 0),
             reverse=True,
@@ -576,10 +578,11 @@ class DetailPanel(VerticalScroll):
             for p in parquet_files
             if p.content_length is None or p.content_length <= _MAX_BINARY_BYTES
         ]
+        over_limit_msg = (
+            f"No parquet files are within the {_format_size(_MAX_BINARY_BYTES)} preview limit"
+        )
         if not size_filtered:
-            raise ValueError(
-                f"No parquet files are within the {_format_size(_MAX_BINARY_BYTES)} preview limit"
-            )
+            raise ValueError(over_limit_msg)
 
         for target in size_filtered:
             try:
@@ -599,9 +602,7 @@ class DetailPanel(VerticalScroll):
             pf = pq.ParquetFile(io.BytesIO(raw))
             return pf.read_row_groups([0]).slice(0, 100)
 
-        raise ValueError(
-            f"No parquet files are within the {_format_size(_MAX_BINARY_BYTES)} preview limit"
-        )
+        raise ValueError(over_limit_msg)
 
     @work(group="detail_aux", exclusive=True)
     async def _load_cdf_preview(self) -> None:

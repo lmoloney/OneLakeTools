@@ -561,7 +561,7 @@ async def test_uri_builders_return_none_without_client():
 
 
 @pytest.mark.asyncio
-async def test_named_uri_builders_percent_encode_workspace_item_and_paths():
+async def test_named_uri_builders_encode_special_characters():
     """Named URI builders should percent-encode unsafe chars in workspace/item/path segments."""
     app, _ = _create_app_harness()
 
