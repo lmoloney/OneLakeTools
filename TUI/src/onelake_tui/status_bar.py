@@ -10,7 +10,7 @@ from textual.widgets import Static
 class StatusBar(Static):
     """3-line status bar: path, shortcuts, and auth info."""
 
-    path: reactive[str] = reactive("onelake://", layout=False)
+    path: reactive[str] = reactive("", layout=False)
     item_count: reactive[int] = reactive(0, layout=False)
     auth_method: reactive[str] = reactive("az-cli", layout=False)
     env_name: reactive[str] = reactive("PROD", layout=False)
@@ -28,8 +28,8 @@ class StatusBar(Static):
 
         # Line 2: keyboard shortcuts (always visible)
         line2 = (
-            "↑↓ Navigate │ Enter Preview │ / Search │ Tab Panel │ "
-            "y Copy │ Y ABFSS │ ^Y URL │ q Quit"
+            "j/k Navigate │ g/G Top/Bottom │ Enter Preview │ / Search │ "
+            "h/l Tab Panels │ y Copy │ ^F Footer │ q Quit"
         )
 
         # Line 3: auth + identity + environment

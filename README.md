@@ -20,7 +20,7 @@ onelake-tui
 - Three-panel layout: workspace picker → item list → DFS tree + preview
 - Rich file preview: Markdown, JSON, CSV, Parquet, Avro, syntax-highlighted code
 - Delta table detail: schema, data preview, transaction history, CDF
-- Live workspace search, human-readable `onelake://` paths, clipboard copy
+- Live workspace search, breadcrumb path display, and copy menu (`y`) for HTTPS/ABFSS named+GUID formats
 - Multi-environment support via `--env` flag (PROD, MSIT, DXT, DAILY)
 - Keyboard-driven, zero-config (uses `az login`)
 
@@ -72,7 +72,7 @@ Each environment maps to the correct Fabric REST and OneLake DFS hostnames autom
 ```bash
 cd TUI
 uv sync --all-extras    # Install all dependencies
-uv run pytest           # Run tests (182 unit + 6 integration)
+uv run pytest           # Run tests
 uv run ruff check src/  # Lint
 uv run onelake-tui      # Launch the TUI
 ```

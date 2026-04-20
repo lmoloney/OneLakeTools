@@ -138,7 +138,7 @@ async def test_status_bar_very_long_path():
         status = app.query_one("#status", StatusBar)
 
         # Set a 200-char path
-        long_path = "onelake://" + "a" * 200
+        long_path = "a" * 200
         status.path = long_path
 
         output = status.render()
@@ -164,7 +164,7 @@ async def test_status_bar_special_chars_in_path():
         status = app.query_one("#status", StatusBar)
 
         # Set path with special chars that could be Rich markup
-        special_path = "onelake://ws/[special]/file [copy].txt"
+        special_path = "ws / [special] / file [copy].txt"
         status.path = special_path
 
         # render() should not crash
@@ -183,7 +183,7 @@ async def test_status_bar_render_with_various_fields():
         status = app.query_one("#status", StatusBar)
 
         # Test with various field combinations
-        status.path = "onelake://test-workspace/item-name"
+        status.path = "test-workspace / item-name"
         status.item_count = 42
         status.auth_method = "msal"
         status.identity = "user@contoso.com"
@@ -191,7 +191,7 @@ async def test_status_bar_render_with_various_fields():
 
         output = status.render()
 
-        assert "onelake://test-workspace/item-name" in output
+        assert "test-workspace / item-name" in output
         assert "42 items" in output
         assert "msal" in output
         assert "user@contoso.com" in output

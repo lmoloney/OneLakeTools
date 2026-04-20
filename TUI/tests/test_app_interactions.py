@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -11,7 +12,9 @@ from textual.widgets import Input
 from onelake_client.environment import DEFAULT_ENVIRONMENT
 from onelake_client.models import Item
 from onelake_tui.app import OneLakeApp
+from onelake_tui.help_screen import HelpScreen
 from onelake_tui.nodes import FileNode, FolderNode, TableNode
+from onelake_tui.status_bar import StatusBar
 from onelake_tui.tree import OneLakeTree
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -93,20 +96,24 @@ async def test_action_search_escape_hides():
         assert search.display is False
 
 
-# ── 3. test_action_help_notifies ─────────────────────────────────────
+# ── 3. test_action_help_opens_fullscreen ─────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_action_help_notifies():
-    """Mount app. Call action_help(). Verify it triggers a notification without crashing."""
+async def test_action_help_opens_fullscreen():
+    """Mount app. Help action should push HelpScreen and close with Escape."""
     app, _ = _create_app_harness()
 
     async with app.run_test() as pilot:
         await pilot.pause()
 
-        # Should not raise
         app.action_help()
         await pilot.pause()
+        assert isinstance(app.screen, HelpScreen)
+
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, HelpScreen)
 
 
 # ── 4. test_copy_path_no_selection ───────────────────────────────────
@@ -114,7 +121,7 @@ async def test_action_help_notifies():
 
 @pytest.mark.asyncio
 async def test_copy_path_no_selection():
-    """Mount app. Call action_copy_path() with no tree selection.
+    """Mount app. Call action_copy() with no tree selection.
     Should show a warning notification without crashing.
     """
     app, _ = _create_app_harness()
@@ -126,8 +133,8 @@ async def test_copy_path_no_selection():
         # Verify tree has no cursor node selected
         assert tree.cursor_node is None or tree.cursor_node.data is None
 
-        # Call action_copy_path — should show warning but not crash
-        app.action_copy_path()
+        # Call action_copy — should show warning but not crash
+        app.action_copy()
         await pilot.pause()
 
 
@@ -136,8 +143,8 @@ async def test_copy_path_no_selection():
 
 @pytest.mark.asyncio
 async def test_node_to_path_folder():
-    """Mount app. Set tree context. Convert FolderNode to path.
-    Verify format: onelake://WsName/ItemName/relative/path
+    """Mount app. Set tree context. Convert FolderNode to display path.
+    Verify format: WsName / ItemName / relative/path
     """
     app, _ = _create_app_harness()
 
@@ -161,8 +168,8 @@ async def test_node_to_path_folder():
             directory="item-guid/Files/subfolder",  # item GUID prefix should be stripped
         )
 
-        result = app._node_to_path(folder_node)
-        assert result == "onelake://MyWorkspace/MyLakehouse/Files/subfolder"
+        result = app._node_display_path(folder_node)
+        assert result == "MyWorkspace / MyLakehouse / Files/subfolder"
 
 
 # ── 6. test_node_to_path_file ────────────────────────────────────────
@@ -170,8 +177,8 @@ async def test_node_to_path_folder():
 
 @pytest.mark.asyncio
 async def test_node_to_path_file():
-    """Mount app. Set tree context. Convert FileNode to path.
-    Verify format: onelake://WsName/ItemName/path/to/file
+    """Mount app. Set tree context. Convert FileNode to display path.
+    Verify format: WsName / ItemName / path/to/file
     """
     app, _ = _create_app_harness()
 
@@ -195,8 +202,8 @@ async def test_node_to_path_file():
             size=2048,
         )
 
-        result = app._node_to_path(file_node)
-        assert result == "onelake://MyWorkspace/MyLakehouse/Files/data.csv"
+        result = app._node_display_path(file_node)
+        assert result == "MyWorkspace / MyLakehouse / Files/data.csv"
 
 
 # ── 7. test_node_to_path_table ───────────────────────────────────────
@@ -204,8 +211,8 @@ async def test_node_to_path_file():
 
 @pytest.mark.asyncio
 async def test_node_to_path_table():
-    """Mount app. Set tree context. Convert TableNode to path.
-    Verify format includes Tables/: onelake://WsName/ItemName/Tables/table_name
+    """Mount app. Set tree context. Convert TableNode to display path.
+    Verify format: WsName / ItemName / Tables / table_name
     """
     app, _ = _create_app_harness()
 
@@ -229,8 +236,8 @@ async def test_node_to_path_table():
             table_name="dbo/my_table",
         )
 
-        result = app._node_to_path(table_node)
-        assert result == "onelake://MyWorkspace/MyLakehouse/Tables/dbo/my_table"
+        result = app._node_display_path(table_node)
+        assert result == "MyWorkspace / MyLakehouse / Tables / dbo/my_table"
 
 
 # ── 8. test_node_to_abfss_folder ────────────────────────────────────
@@ -262,7 +269,7 @@ async def test_node_to_abfss_folder():
             directory="item-guid/Files/subfolder",
         )
 
-        result = app._node_to_abfss(folder_node)
+        result = app._node_to_abfss_guid(folder_node)
         host = DEFAULT_ENVIRONMENT.dfs_host
         assert result == f"abfss://ws-guid-123@{host}/item-guid/Files/subfolder"
 
@@ -296,7 +303,7 @@ async def test_node_to_https_file():
             size=2048,
         )
 
-        result = app._node_to_https(file_node)
+        result = app._node_to_https_guid(file_node)
         host = DEFAULT_ENVIRONMENT.dfs_host
         assert result == f"https://{host}/ws-guid-123/item-guid/Files/data.csv"
 
@@ -306,7 +313,7 @@ async def test_node_to_https_file():
 
 @pytest.mark.asyncio
 async def test_node_to_path_none_data():
-    """Mount app. Call _node_to_path() with unsupported data type.
+    """Mount app. Call _node_display_path() with unsupported data type.
     Verify it returns None without crashing.
     """
     app, _ = _create_app_harness()
@@ -315,15 +322,15 @@ async def test_node_to_path_none_data():
         await pilot.pause()
 
         # Call with unsupported type
-        result = app._node_to_path("unsupported")
+        result = app._node_display_path("unsupported")
         assert result is None
 
         # Also test with an integer
-        result = app._node_to_path(42)
+        result = app._node_display_path(42)
         assert result is None
 
         # Test with None
-        result = app._node_to_path(None)
+        result = app._node_display_path(None)
         assert result is None
 
 
@@ -371,7 +378,7 @@ async def test_node_to_https_table():
             table_name="dbo/my_table",
         )
 
-        result = app._node_to_https(table_node)
+        result = app._node_to_https_guid(table_node)
         host = DEFAULT_ENVIRONMENT.dfs_host
         assert result == f"https://{host}/ws-guid-123/item-guid/Tables/dbo/my_table"
 
@@ -402,7 +409,7 @@ async def test_node_to_abfss_file():
             size=2048,
         )
 
-        result = app._node_to_abfss(file_node)
+        result = app._node_to_abfss_guid(file_node)
         host = DEFAULT_ENVIRONMENT.dfs_host
         assert result == f"abfss://ws-guid-123@{host}/item-guid/Files/data.csv"
 
@@ -433,6 +440,217 @@ async def test_node_to_abfss_table():
             table_name="dbo/my_table",
         )
 
-        result = app._node_to_abfss(table_node)
+        result = app._node_to_abfss_guid(table_node)
         host = DEFAULT_ENVIRONMENT.dfs_host
         assert result == f"abfss://ws-guid-123@{host}/item-guid/Tables/dbo/my_table"
+
+
+@pytest.mark.asyncio
+async def test_action_toggle_footer_toggles_display():
+    """Status bar display should toggle on each action call."""
+    app, _ = _create_app_harness()
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        status = app.query_one(StatusBar)
+        assert status.display is True
+
+        app.action_toggle_footer()
+        assert status.display is False
+
+        app.action_toggle_footer()
+        assert status.display is True
+
+
+@pytest.mark.asyncio
+async def test_ctrl_f_key_toggles_footer():
+    """Ctrl+f binding exists and footer action toggles visibility."""
+    app, _ = _create_app_harness()
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        status = app.query_one(StatusBar)
+        assert status.display is True
+
+        assert any(binding.key == "ctrl+f" for binding in app.BINDINGS)
+
+        app.action_toggle_footer()
+        assert status.display is False
+
+
+@pytest.mark.asyncio
+async def test_on_key_panel_shortcuts_call_focus_actions():
+    """h/l shortcuts should call focus previous/next actions."""
+    app, _ = _create_app_harness()
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.query_one("#tree", OneLakeTree).focus()
+        await pilot.pause()
+
+        with (
+            patch.object(app, "action_focus_previous") as focus_prev,
+            patch.object(app, "action_focus_next") as focus_next,
+        ):
+            left_event = SimpleNamespace(key="h", prevent_default=MagicMock())
+            app.on_key(left_event)
+            focus_prev.assert_called_once()
+            left_event.prevent_default.assert_called_once()
+
+            right_event = SimpleNamespace(key="l", prevent_default=MagicMock())
+            app.on_key(right_event)
+            focus_next.assert_called_once()
+            right_event.prevent_default.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_on_key_vim_nav_shortcuts_map_to_simulate_key():
+    """j/k/g/G should map to down/up/home/end on focused nav widgets."""
+    app, _ = _create_app_harness()
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.query_one("#tree", OneLakeTree).focus()
+        await pilot.pause()
+
+        with patch.object(app, "simulate_key") as simulate_key:
+            for key, expected in (("j", "down"), ("k", "up"), ("g", "home"), ("G", "end")):
+                event = SimpleNamespace(key=key, prevent_default=MagicMock())
+                app.on_key(event)
+                simulate_key.assert_called_with(expected)
+                event.prevent_default.assert_called_once()
+                simulate_key.reset_mock()
+
+
+@pytest.mark.asyncio
+async def test_on_key_vim_nav_ignored_while_search_focused():
+    """j/k/g/G shortcuts should not fire while typing in search input."""
+    app, _ = _create_app_harness()
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.action_search()
+        await pilot.pause()
+
+        with patch.object(app, "simulate_key") as simulate_key:
+            event = SimpleNamespace(key="j", prevent_default=MagicMock())
+            app.on_key(event)
+            simulate_key.assert_not_called()
+            event.prevent_default.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_uri_builders_return_none_without_client():
+    """Path builders should safely return None when app client is unavailable."""
+    app, _ = _create_app_harness()
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        tree = app.query_one("#tree", OneLakeTree)
+        tree._current_workspace_name = "MyWorkspace"
+        tree._current_workspace_id = "ws-guid-123"
+        tree._current_item = Item(id="item-guid", display_name="MyLakehouse", type="Lakehouse")
+
+        file_node = FileNode(workspace="ws-guid-123", path="item-guid/Files/data.csv", size=1)
+        app.client = None
+
+        assert app._node_to_https_named(file_node) is None
+        assert app._node_to_https_guid(file_node) is None
+        assert app._node_to_abfss_named(file_node) is None
+        assert app._node_to_abfss_guid(file_node) is None
+
+
+@pytest.mark.asyncio
+async def test_named_uri_builders_encode_special_characters():
+    """Named URI builders should percent-encode unsafe chars in workspace/item/path segments."""
+    app, _ = _create_app_harness()
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        tree = app.query_one("#tree", OneLakeTree)
+        tree._current_workspace_name = "My Workspace/West"
+        tree._current_workspace_id = "ws-guid-123"
+        tree._current_item = Item(id="item-guid", display_name="Lake#1", type="Lakehouse")
+
+        file_node = FileNode(
+            workspace="ws-guid-123",
+            path="item-guid/Files/raw data/file #1.csv",
+            size=1,
+        )
+        table_node = TableNode(
+            workspace="ws-guid-123",
+            item_path="item-guid",
+            table_name="dbo/my table#1",
+        )
+
+        host = DEFAULT_ENVIRONMENT.dfs_host
+        assert app._node_to_https_named(file_node) == (
+            f"https://{host}/My%20Workspace%2FWest/Lake%231/Files/raw%20data/file%20%231.csv"
+        )
+        assert app._node_to_abfss_named(table_node) == (
+            f"abfss://My%20Workspace%2FWest@{host}/Lake%231/Tables/dbo/my%20table%231"
+        )
+
+
+@pytest.mark.asyncio
+async def test_guid_uri_builders_use_node_workspace_id():
+    """GUID URI builders should use workspace from the selected node, not tree state."""
+    app, _ = _create_app_harness()
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        tree = app.query_one("#tree", OneLakeTree)
+        tree._current_workspace_id = ""
+
+        file_node = FileNode(
+            workspace="ws-guid-from-node",
+            path="item-guid/Files/data.csv",
+            size=1,
+        )
+
+        host = DEFAULT_ENVIRONMENT.dfs_host
+        assert app._node_to_https_guid(file_node) == (
+            f"https://{host}/ws-guid-from-node/item-guid/Files/data.csv"
+        )
+        assert app._node_to_abfss_guid(file_node) == (
+            f"abfss://ws-guid-from-node@{host}/item-guid/Files/data.csv"
+        )
+
+
+@pytest.mark.asyncio
+async def test_copy_to_clipboard_uses_platform_command():
+    """macOS path should use pbcopy command."""
+    app, _ = _create_app_harness()
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        with (
+            patch("onelake_tui.app.platform.system", return_value="Darwin"),
+            patch("onelake_tui.app.subprocess.run") as run,
+            patch.object(app, "notify") as notify,
+        ):
+            app._copy_to_clipboard("abc", "TEST")
+            run.assert_called_once_with(["pbcopy"], input=b"abc", check=True)
+            notify.assert_called_with("Copied TEST: abc", timeout=3)
+
+
+@pytest.mark.asyncio
+async def test_copy_to_clipboard_linux_fallback_chain():
+    """Linux path should try wl-copy, then xclip, then xsel."""
+    app, _ = _create_app_harness()
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        side_effects = [
+            FileNotFoundError("wl-copy missing"),
+            FileNotFoundError("xclip missing"),
+            None,
+        ]
+        with (
+            patch("onelake_tui.app.platform.system", return_value="Linux"),
+            patch("onelake_tui.app.subprocess.run", side_effect=side_effects) as run,
+            patch.object(app, "notify") as notify,
+        ):
+            app._copy_to_clipboard("abc", "TEST")
+            assert run.call_count == 3
+            notify.assert_called_with("Copied TEST: abc", timeout=3)

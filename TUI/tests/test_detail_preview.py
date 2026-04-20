@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import DataTable, Markdown, Static, TextArea
 
 from onelake_client.environment import DEFAULT_ENVIRONMENT
+from onelake_client.exceptions import FileTooLargeError
+from onelake_client.models import PathInfo
 from onelake_tui.detail import (
+    _MAX_BINARY_BYTES,
     _MAX_PREVIEW_BYTES,
     DetailPanel,
 )
-from onelake_tui.nodes import FileNode
+from onelake_tui.nodes import FileNode, TableNode
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -250,3 +253,90 @@ async def test_preview_ndjson_formats_lines():
         # Verify a TextArea is mounted with formatted JSON
         textareas = detail.query(TextArea)
         assert len(textareas) > 0, "Expected TextArea to be mounted for NDJSON preview"
+
+
+@pytest.mark.asyncio
+async def test_parquet_fallback_retries_on_file_too_large_error():
+    """Parquet fallback should keep trying candidates when unknown-size file exceeds max_bytes."""
+    client = _make_mock_client()
+    detail = DetailPanel(client)
+    table = TableNode(workspace="ws", item_path="item-guid", table_name="dbo/table")
+
+    client.dfs.list_paths = AsyncMock(
+        return_value=[
+            PathInfo(name="item-guid/Tables/dbo/table/huge.parquet", isDirectory=False),
+            PathInfo(name="item-guid/Tables/dbo/table/small.parquet", isDirectory=False),
+        ]
+    )
+    client.dfs.read_file = AsyncMock(
+        side_effect=[
+            FileTooLargeError(size=_MAX_BINARY_BYTES * 2, max_bytes=_MAX_BINARY_BYTES),
+            b"parquet-bytes",
+        ]
+    )
+
+    sample = MagicMock(name="sample")
+    row_groups = MagicMock(name="row_groups")
+    row_groups.slice.return_value = sample
+    parquet_file = MagicMock(name="parquet_file")
+    parquet_file.read_row_groups.return_value = row_groups
+
+    with patch("pyarrow.parquet.ParquetFile", return_value=parquet_file):
+        result = await detail._read_parquet_fallback(table)
+
+    assert result is sample
+    assert client.dfs.read_file.await_count == 2
+    client.dfs.read_file.assert_has_awaits(
+        [
+            call(
+                "ws",
+                "item-guid/Tables/dbo/table/huge.parquet",
+                max_bytes=_MAX_BINARY_BYTES,
+            ),
+            call(
+                "ws",
+                "item-guid/Tables/dbo/table/small.parquet",
+                max_bytes=_MAX_BINARY_BYTES,
+            ),
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_parquet_fallback_prioritizes_known_size_candidates():
+    """Known-size parquet candidates should be attempted before unknown-size ones."""
+    client = _make_mock_client()
+    detail = DetailPanel(client)
+    table = TableNode(workspace="ws", item_path="item-guid", table_name="dbo/table")
+
+    client.dfs.list_paths = AsyncMock(
+        return_value=[
+            PathInfo(name="item-guid/Tables/dbo/table/unknown.parquet", isDirectory=False),
+            PathInfo(
+                name="item-guid/Tables/dbo/table/known.parquet",
+                isDirectory=False,
+                contentLength=1024,
+            ),
+        ]
+    )
+    client.dfs.read_file = AsyncMock(return_value=b"parquet-bytes")
+
+    sample = MagicMock(name="sample")
+    row_groups = MagicMock(name="row_groups")
+    row_groups.slice.return_value = sample
+    parquet_file = MagicMock(name="parquet_file")
+    parquet_file.read_row_groups.return_value = row_groups
+
+    with patch("pyarrow.parquet.ParquetFile", return_value=parquet_file):
+        result = await detail._read_parquet_fallback(table)
+
+    assert result is sample
+    client.dfs.read_file.assert_has_awaits(
+        [
+            call(
+                "ws",
+                "item-guid/Tables/dbo/table/known.parquet",
+                max_bytes=_MAX_BINARY_BYTES,
+            ),
+        ]
+    )

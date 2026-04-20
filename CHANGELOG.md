@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Copy UX now uses a single `y` copy menu with four URI targets: HTTPS named, HTTPS GUID, ABFSS named, ABFSS GUID.
+- Path display now uses breadcrumb format (`Workspace / Item / path`) instead of `onelake://` display strings.
+- Help (`?`) now opens a full-screen overlay and footer visibility can be toggled with `Ctrl+F`.
+- Vim-style navigation shortcuts (`j/k/g/G`, `h/l`) are documented and surfaced consistently.
+
+### Fixed
+
+- Clipboard copy now supports platform-native command paths across macOS, Windows, and Linux with graceful fallback.
+- Delta history loading now uses bounded parallelism to reduce latency on high-version tables.
+- Parquet fallback preview now enforces memory-safe file-size limits.
+- Release publishing workflow now runs lint + unit tests before building and publishing to PyPI.
+- Documentation and splash hints are synchronized with current keybindings and URI behavior.
+
 ## [0.2.0b1] - 2026-04-07
 
 ### Added

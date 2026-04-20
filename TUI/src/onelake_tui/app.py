@@ -5,18 +5,22 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import platform
 import subprocess
 from pathlib import Path
+from urllib.parse import quote
 
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Header, Input, Tree
+from textual.widgets import Header, Input, OptionList, Tree
 
 from onelake_client import OneLakeClient, create_credential, get_environment
 from onelake_client.environment import DEFAULT_ENVIRONMENT, ENVIRONMENTS, FabricEnvironment
+from onelake_tui.copy_menu import CopyFormatMenu
 from onelake_tui.detail import DetailPanel
+from onelake_tui.help_screen import HelpScreen
 from onelake_tui.item_list import ItemList
 from onelake_tui.nodes import (
     FileNode,
@@ -66,11 +70,10 @@ class OneLakeApp(App):
         Binding("q", "quit", "Quit", priority=True),
         Binding("r", "refresh", "Refresh"),
         Binding("S", "screenshot", "Screenshot", show=False),
-        Binding("y", "copy_path", "Copy Path"),
-        Binding("Y", "copy_abfss", "Copy ABFSS", show=False),
-        Binding("ctrl+y", "copy_https", "Copy URL", show=False),
+        Binding("y", "copy", "Copy"),
         Binding("slash", "search", "Search", show=True, priority=True),
         Binding("question_mark", "help", "Help"),
+        Binding("ctrl+f", "toggle_footer", "Footer", show=False),
         Binding("tab", "focus_next", "Next Panel", show=False),
         Binding("shift+tab", "focus_previous", "Prev Panel", show=False),
     ]
@@ -170,7 +173,7 @@ class OneLakeApp(App):
         self.sub_title = f"{ws.display_name}{ring}"
         # Update status bar
         status = self.query_one(StatusBar)
-        status.update_path(f"onelake://{ws.display_name}")
+        status.update_path(ws.display_name)
         # Fallback: ensure identity is displayed (covers race with _probe_auth)
         if not status.identity:
             self._ensure_identity()
@@ -184,7 +187,7 @@ class OneLakeApp(App):
         detail.set_context(event.workspace_name, event.item.display_name)
         # Update status bar
         status = self.query_one(StatusBar)
-        status.update_path(f"onelake://{event.workspace_name}/{event.item.display_name}")
+        status.update_path(f"{event.workspace_name} / {event.item.display_name}")
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
         """Update detail panel when a tree node is highlighted."""
@@ -192,7 +195,7 @@ class OneLakeApp(App):
         detail = self.query_one("#detail", DetailPanel)
         status = self.query_one(StatusBar)
 
-        path = self._node_to_path(data)
+        path = self._node_display_path(data)
         if path:
             status.update_path(path)
 
@@ -227,22 +230,62 @@ class OneLakeApp(App):
             self.query_one("#items", ItemList).focus()
 
     def on_key(self, event) -> None:
-        """Handle Escape from search input."""
+        """Handle Escape, vim-style navigation (j/k/g/G), and panel switching (h/l)."""
         search = self.query_one("#search-input", Input)
+
+        # Escape dismisses search
         if event.key == "escape" and search.display and search.has_focus:
             search.display = False
             picker = self.query_one("#picker", WorkspacePicker)
             picker.clear_filter()
             picker.focus()
             event.prevent_default()
+            return
+
+        # Skip vim keys when typing in the search input
+        if search.has_focus:
+            return
+
+        focused = self.focused
+        if focused is None:
+            return
+
+        # h/l panel switching
+        if event.key == "h":
+            self.action_focus_previous()
+            event.prevent_default()
+            return
+        if event.key == "l":
+            self.action_focus_next()
+            event.prevent_default()
+            return
+
+        # j/k/g/G vim navigation on list and tree widgets
+        is_nav_widget = isinstance(focused, (OptionList, Tree))
+        if not is_nav_widget:
+            return
+
+        if event.key == "j":
+            self.simulate_key("down")
+            event.prevent_default()
+        elif event.key == "k":
+            self.simulate_key("up")
+            event.prevent_default()
+        elif event.key == "g":
+            self.simulate_key("home")
+            event.prevent_default()
+        elif event.key == "G":
+            self.simulate_key("end")
+            event.prevent_default()
 
     def action_help(self) -> None:
-        """Show keyboard shortcuts."""
-        self.notify(
-            "↑↓ Navigate  │  Enter Preview  │  / Search  │  r Refresh  │  q Quit\n"
-            "y Copy path  │  Y Copy ABFSS  │  Ctrl+Y Copy URL  │  S Screenshot",
-            timeout=10,
-        )
+        """Show full-screen help overlay."""
+        self.push_screen(HelpScreen())
+
+    def action_toggle_footer(self) -> None:
+        """Toggle the status bar visibility."""
+        status = self.query_one(StatusBar)
+        status.display = not status.display
 
     def action_screenshot(self) -> None:
         """Save an SVG screenshot to the current directory."""
@@ -260,88 +303,171 @@ class OneLakeApp(App):
 
     def _copy_to_clipboard(self, text: str, label: str) -> None:
         """Copy text to clipboard and show notification."""
-        try:
-            subprocess.run(["pbcopy"], input=text.encode(), check=True)
-            self.notify(f"Copied {label}: {text}", timeout=3)
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            self.notify(f"{label}: {text}", timeout=5)
+        system = platform.system()
+        commands: list[list[str]]
+        if system == "Darwin":
+            commands = [["pbcopy"]]
+        elif system == "Windows":
+            commands = [["clip.exe"]]
+        elif system == "Linux":
+            commands = [
+                ["wl-copy"],
+                ["xclip", "-selection", "clipboard"],
+                ["xsel", "--clipboard", "--input"],
+            ]
+        else:
+            commands = []
 
-    def action_copy_path(self) -> None:
-        """Copy the current OneLake path (named) to clipboard."""
+        for command in commands:
+            try:
+                subprocess.run(command, input=text.encode(), check=True)
+                self.notify(f"Copied {label}: {text}", timeout=3)
+                return
+            except FileNotFoundError:
+                continue
+            except subprocess.CalledProcessError as exc:
+                logger.debug("Clipboard command failed (%s): %s", " ".join(command), exc)
+
+        self.notify(f"{label}: {text}", timeout=5)
+
+    @staticmethod
+    def _relative_item_path(path: str) -> str:
+        """Strip item prefix from a DFS path for display or named URIs."""
+        normalized = path.rstrip("/")
+        return normalized.split("/", 1)[-1] if "/" in normalized else normalized
+
+    @staticmethod
+    def _encode_segment(value: str) -> str:
+        """Percent-encode a single URI segment."""
+        return quote(value, safe="")
+
+    @staticmethod
+    def _encode_path(value: str) -> str:
+        """Percent-encode a URI path while preserving path separators."""
+        return quote(value, safe="/")
+
+    def action_copy(self) -> None:
+        """Open copy-format menu and copy the selected URI to clipboard."""
         tree = self.query_one("#tree", OneLakeTree)
         node = tree.cursor_node
         if node is None or node.data is None:
             self.notify("No item selected", severity="warning")
             return
-        path = self._node_to_path(node.data)
-        if path:
-            self._copy_to_clipboard(path, "path")
 
-    def action_copy_abfss(self) -> None:
-        """Copy the ABFSS GUID-based path to clipboard."""
-        tree = self.query_one("#tree", OneLakeTree)
-        node = tree.cursor_node
-        if node is None or node.data is None:
-            self.notify("No item selected", severity="warning")
-            return
-        path = self._node_to_abfss(node.data)
-        if path:
-            self._copy_to_clipboard(path, "ABFSS")
+        def _on_format_chosen(format_key: str | None) -> None:
+            if format_key is None:
+                return
+            builders = {
+                "https_named": self._node_to_https_named,
+                "https_guid": self._node_to_https_guid,
+                "abfss_named": self._node_to_abfss_named,
+                "abfss_guid": self._node_to_abfss_guid,
+            }
+            builder = builders.get(format_key)
+            if builder is None:
+                return
+            uri = builder(node.data)
+            if not uri:
+                self.notify(
+                    "Couldn't generate a URI for the selected item",
+                    severity="warning",
+                    markup=False,
+                )
+                return
+            self._copy_to_clipboard(uri, format_key.replace("_", " ").upper())
 
-    def action_copy_https(self) -> None:
-        """Copy the HTTPS DFS URL to clipboard."""
-        tree = self.query_one("#tree", OneLakeTree)
-        node = tree.cursor_node
-        if node is None or node.data is None:
-            self.notify("No item selected", severity="warning")
-            return
-        path = self._node_to_https(node.data)
-        if path:
-            self._copy_to_clipboard(path, "URL")
+        self.push_screen(CopyFormatMenu(), callback=_on_format_chosen)
 
-    def _node_to_path(self, data: object) -> str | None:
-        """Convert node data to a human-readable OneLake path string."""
+    def _node_display_path(self, data: object) -> str | None:
+        """Build a human-readable breadcrumb path for display (not clipboard)."""
         tree = self.query_one("#tree", OneLakeTree)
         ws_name = tree._current_workspace_name or "?"
         item_name = tree._current_item.display_name if tree._current_item else "?"
 
         if isinstance(data, FolderNode):
-            # Strip item GUID prefix to get relative path
-            rel = data.directory.split("/", 1)[-1] if "/" in data.directory else data.directory
-            return f"onelake://{ws_name}/{item_name}/{rel}"
+            rel = self._relative_item_path(data.directory)
+            return f"{ws_name} / {item_name} / {rel}"
         elif isinstance(data, FileNode):
-            rel = data.path.split("/", 1)[-1] if "/" in data.path else data.path
-            return f"onelake://{ws_name}/{item_name}/{rel}"
+            rel = self._relative_item_path(data.path)
+            return f"{ws_name} / {item_name} / {rel}"
         elif isinstance(data, TableNode):
-            return f"onelake://{ws_name}/{item_name}/Tables/{data.table_name}"
+            return f"{ws_name} / {item_name} / Tables / {data.table_name}"
         return None
 
-    def _node_to_abfss(self, data: object) -> str | None:
-        """Convert node data to an abfss:// GUID-based path."""
+    def _node_to_https_named(self, data: object) -> str | None:
+        """Build an HTTPS DFS URL using workspace/item display names."""
+        if self.client is None:
+            return None
         tree = self.query_one("#tree", OneLakeTree)
-        ws_id = tree._current_workspace_id
+        ws_name = tree._current_workspace_name or "?"
+        item_name = tree._current_item.display_name if tree._current_item else "?"
+        host = self.client.env.dfs_host
+        ws_name_enc = self._encode_segment(ws_name)
+        item_name_enc = self._encode_segment(item_name)
+
+        if isinstance(data, FolderNode):
+            rel = self._relative_item_path(data.directory)
+            return f"https://{host}/{ws_name_enc}/{item_name_enc}/{self._encode_path(rel)}"
+        elif isinstance(data, FileNode):
+            rel = self._relative_item_path(data.path)
+            return f"https://{host}/{ws_name_enc}/{item_name_enc}/{self._encode_path(rel)}"
+        elif isinstance(data, TableNode):
+            return (
+                f"https://{host}/{ws_name_enc}/{item_name_enc}/Tables/"
+                f"{self._encode_path(data.table_name)}"
+            )
+        return None
+
+    def _node_to_https_guid(self, data: object) -> str | None:
+        """Build an HTTPS DFS URL using GUIDs."""
+        if self.client is None:
+            return None
         host = self.client.env.dfs_host
 
         if isinstance(data, FolderNode):
-            return f"abfss://{ws_id}@{host}/{data.directory}"
+            return f"https://{host}/{data.workspace}/{data.directory}"
         elif isinstance(data, FileNode):
-            return f"abfss://{ws_id}@{host}/{data.path}"
+            return f"https://{host}/{data.workspace}/{data.path}"
         elif isinstance(data, TableNode):
-            return f"abfss://{ws_id}@{host}/{data.item_path}/Tables/{data.table_name}"
+            return f"https://{host}/{data.workspace}/{data.item_path}/Tables/{data.table_name}"
         return None
 
-    def _node_to_https(self, data: object) -> str | None:
-        """Convert node data to an https:// DFS URL."""
+    def _node_to_abfss_named(self, data: object) -> str | None:
+        """Build an abfss:// URI using workspace/item display names."""
+        if self.client is None:
+            return None
         tree = self.query_one("#tree", OneLakeTree)
-        ws_id = tree._current_workspace_id
+        ws_name = tree._current_workspace_name or "?"
+        item_name = tree._current_item.display_name if tree._current_item else "?"
+        host = self.client.env.dfs_host
+        ws_name_enc = self._encode_segment(ws_name)
+        item_name_enc = self._encode_segment(item_name)
+
+        if isinstance(data, FolderNode):
+            rel = self._relative_item_path(data.directory)
+            return f"abfss://{ws_name_enc}@{host}/{item_name_enc}/{self._encode_path(rel)}"
+        elif isinstance(data, FileNode):
+            rel = self._relative_item_path(data.path)
+            return f"abfss://{ws_name_enc}@{host}/{item_name_enc}/{self._encode_path(rel)}"
+        elif isinstance(data, TableNode):
+            return (
+                f"abfss://{ws_name_enc}@{host}/{item_name_enc}/Tables/"
+                f"{self._encode_path(data.table_name)}"
+            )
+        return None
+
+    def _node_to_abfss_guid(self, data: object) -> str | None:
+        """Build an abfss:// URI using GUIDs."""
+        if self.client is None:
+            return None
         host = self.client.env.dfs_host
 
         if isinstance(data, FolderNode):
-            return f"https://{host}/{ws_id}/{data.directory}"
+            return f"abfss://{data.workspace}@{host}/{data.directory}"
         elif isinstance(data, FileNode):
-            return f"https://{host}/{ws_id}/{data.path}"
+            return f"abfss://{data.workspace}@{host}/{data.path}"
         elif isinstance(data, TableNode):
-            return f"https://{host}/{ws_id}/{data.item_path}/Tables/{data.table_name}"
+            return f"abfss://{data.workspace}@{host}/{data.item_path}/Tables/{data.table_name}"
         return None
 
     def action_refresh(self) -> None:

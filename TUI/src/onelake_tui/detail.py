@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import csv
 import io
@@ -27,6 +28,7 @@ from textual.widgets import (
 )
 
 from onelake_client import OneLakeClient
+from onelake_client.exceptions import FileTooLargeError
 from onelake_tui.nodes import FileNode, FolderNode, TableNode
 from onelake_tui.sprite import OneLakeSprite, get_welcome
 
@@ -36,6 +38,9 @@ NodeData = FolderNode | FileNode | TableNode | None
 
 _MAX_PREVIEW_BYTES = 512 * 1024  # 512KB text preview limit
 _MAX_BINARY_BYTES = 50 * 1024 * 1024  # 50MB binary preview limit
+_MAX_DELTA_LOG_BYTES = 2 * 1024 * 1024  # 2MB per _delta_log file
+_MAX_HISTORY_FILES = 20
+_HISTORY_FETCH_CONCURRENCY = 4
 
 _SYNTAX_LEXERS = {
     ".py": "python",
@@ -149,7 +154,7 @@ class DetailPanel(VerticalScroll):
         folder_name = data.directory.split("/")[-1] if "/" in data.directory else data.directory
         self.mount(Label(f"📂 {folder_name}", classes="detail-title"))
         rel = data.directory.split("/", 1)[-1] if "/" in data.directory else data.directory
-        friendly = f"onelake://{self._workspace_name}/{self._item_name}/{rel}"
+        friendly = f"{self._workspace_name} / {self._item_name} / {rel}"
         self.mount(Static(f"[b]Path:[/b] {esc(friendly)}", classes="detail-section"))
 
     def _show_file(self, data: FileNode) -> None:
@@ -157,7 +162,7 @@ class DetailPanel(VerticalScroll):
         file_name = data.path.split("/")[-1]
         self.mount(Label(f"📄 {file_name}", classes="detail-title"))
         rel = data.path.split("/", 1)[-1] if "/" in data.path else data.path
-        friendly = f"onelake://{self._workspace_name}/{self._item_name}/{rel}"
+        friendly = f"{self._workspace_name} / {self._item_name} / {rel}"
         self.mount(Static(f"[b]Path:[/b] {esc(friendly)}", classes="detail-section"))
         self.mount(Static(f"[b]Size:[/b] {_format_size(data.size)}", classes="detail-section"))
         self._load_file_properties(data)
@@ -190,7 +195,7 @@ class DetailPanel(VerticalScroll):
         self._clear()
         self._current_table_data = data
         self.mount(Label(f"🗃️ {data.table_name}", classes="detail-title"))
-        friendly = f"onelake://{self._workspace_name}/{self._item_name}/Tables/{data.table_name}"
+        friendly = f"{self._workspace_name} / {self._item_name} / Tables / {data.table_name}"
         self.mount(Static(f"[b]Path:[/b] {esc(friendly)}", classes="detail-section"))
         self.mount(LoadingIndicator(classes="table-loading"))
         self._load_table_metadata(data)
@@ -367,35 +372,56 @@ class DetailPanel(VerticalScroll):
                 [p for p in paths if p.name.endswith(".json")],
                 key=lambda p: p.name,
                 reverse=True,
-            )[:20]
+            )[:_MAX_HISTORY_FILES]
 
             commits: list[dict] = []
-            for pf in json_files:
-                raw = await self.client.dfs.read_file(data.workspace, pf.name)
+            semaphore = asyncio.Semaphore(_HISTORY_FETCH_CONCURRENCY)
+
+            async def _read_commit_file(path_info) -> list[dict]:
+                file_commits: list[dict] = []
+                async with semaphore:
+                    raw = await self.client.dfs.read_file(
+                        data.workspace,
+                        path_info.name,
+                        max_bytes=_MAX_DELTA_LOG_BYTES,
+                    )
+
                 for line in raw.decode("utf-8", errors="replace").strip().splitlines():
                     line = line.strip()
                     if not line:
                         continue
                     try:
                         obj = json.loads(line)
-                        if "commitInfo" in obj:
-                            ci = obj["commitInfo"]
-                            fname = pf.name.split("/")[-1]
-                            version = fname.replace(".json", "").lstrip("0") or "0"
-                            # Use commitInfo.timestamp (ms epoch), fall back to file lastModified
-                            ts_raw = ci.get("timestamp")
-                            if ts_raw is None and pf.last_modified:
-                                ts_raw = pf.last_modified
-                            commits.append(
-                                {
-                                    "version": version,
-                                    "timestamp": ts_raw,
-                                    "operation": ci.get("operation", ""),
-                                    "metrics": ci.get("operationMetrics", {}),
-                                }
-                            )
+                        if "commitInfo" not in obj:
+                            continue
+                        ci = obj["commitInfo"]
+                        fname = path_info.name.split("/")[-1]
+                        version = fname.replace(".json", "").lstrip("0") or "0"
+                        # Use commitInfo.timestamp (ms epoch), fall back to file lastModified
+                        ts_raw = ci.get("timestamp")
+                        if ts_raw is None and path_info.last_modified:
+                            ts_raw = path_info.last_modified
+                        file_commits.append(
+                            {
+                                "version": version,
+                                "timestamp": ts_raw,
+                                "operation": ci.get("operation", ""),
+                                "metrics": ci.get("operationMetrics", {}),
+                            }
+                        )
                     except json.JSONDecodeError:
                         continue
+                return file_commits
+
+            results = await asyncio.gather(
+                *(_read_commit_file(pf) for pf in json_files),
+                return_exceptions=True,
+            )
+            for result in results:
+                if isinstance(result, Exception):
+                    logger.debug("Skipping unreadable commit file: %s", result)
+                    continue
+                commits.extend(result)
 
             with contextlib.suppress(NoMatches):
                 self.query_one("#txn-loading").remove()
@@ -540,12 +566,43 @@ class DetailPanel(VerticalScroll):
         if not parquet_files:
             raise FileNotFoundError("No parquet files found in table directory")
 
-        # Read the first (largest) parquet file for a representative sample
-        parquet_files.sort(key=lambda p: p.content_length or 0, reverse=True)
-        target = parquet_files[0]
-        raw = await self.client.dfs.read_file(data.workspace, target.name)
-        pf = pq.ParquetFile(io.BytesIO(raw))
-        return pf.read_row_groups([0]).slice(0, 100)
+        # Prefer known-size parquet files first (largest to smallest), then unknown-size files.
+        # Tuple sort key is `(has_known_size, size_or_zero)` with `reverse=True`, so `True`
+        # (known size, even when zero) sorts before `False` (unknown size / None).
+        parquet_files.sort(
+            key=lambda p: (p.content_length is not None, p.content_length or 0),
+            reverse=True,
+        )
+        size_filtered = [
+            p
+            for p in parquet_files
+            if p.content_length is None or p.content_length <= _MAX_BINARY_BYTES
+        ]
+        over_limit_msg = (
+            f"No parquet files are within the {_format_size(_MAX_BINARY_BYTES)} preview limit"
+        )
+        if not size_filtered:
+            raise ValueError(over_limit_msg)
+
+        for target in size_filtered:
+            try:
+                raw = await self.client.dfs.read_file(
+                    data.workspace,
+                    target.name,
+                    max_bytes=_MAX_BINARY_BYTES,
+                )
+            except FileTooLargeError:
+                logger.debug(
+                    "Skipping parquet candidate over preview limit despite "
+                    "missing/incorrect size: %s",
+                    target.name,
+                )
+                continue
+
+            pf = pq.ParquetFile(io.BytesIO(raw))
+            return pf.read_row_groups([0]).slice(0, 100)
+
+        raise ValueError(over_limit_msg)
 
     @work(group="detail_aux", exclusive=True)
     async def _load_cdf_preview(self) -> None:
@@ -617,7 +674,7 @@ class DetailPanel(VerticalScroll):
         ext = ("." + file_name.rsplit(".", 1)[-1]).lower() if "." in file_name else ""
         self.mount(Label(f"👁 Preview: {file_name}", classes="detail-title"))
         rel = data.path.split("/", 1)[-1] if "/" in data.path else data.path
-        friendly = f"onelake://{self._workspace_name}/{self._item_name}/{rel}"
+        friendly = f"{self._workspace_name} / {self._item_name} / {rel}"
         self.mount(
             Static(
                 f"[b]Path:[/b] {esc(friendly)}  │  [b]Size:[/b] {_format_size(data.size)}",

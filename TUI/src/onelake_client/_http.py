@@ -5,6 +5,7 @@ import json
 import logging
 import random
 from collections.abc import AsyncIterator, Callable
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
 import httpx
@@ -19,7 +20,10 @@ from onelake_client.exceptions import (
 
 logger = logging.getLogger("onelake_client")
 
-_USER_AGENT = "onelake-client/0.1.0"
+try:
+    _USER_AGENT = f"onelake-client/{version('onelake-tui')}"
+except PackageNotFoundError:
+    _USER_AGENT = "onelake-client/dev"
 _DEFAULT_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 _MAX_RETRIES = 3
 _RETRY_STATUSES = {429, 500, 502, 503, 504}

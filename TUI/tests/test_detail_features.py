@@ -163,7 +163,7 @@ class TestPathFormatBuilders:
     HOST = "onelake.dfs.fabric.microsoft.com"
 
     def _make_named_path(self, ws_name, item_name, rel):
-        return f"onelake://{ws_name}/{item_name}/{rel}"
+        return f"{ws_name} / {item_name} / {rel}"
 
     def _make_abfss_path(self, ws_id, host, full_path):
         return f"abfss://{ws_id}@{host}/{full_path}"
@@ -175,17 +175,17 @@ class TestPathFormatBuilders:
         directory = f"{self.ITEM_ID}/Files"
         rel = directory.split("/", 1)[-1]
         path = self._make_named_path(self.WS_NAME, self.ITEM_NAME, rel)
-        assert path == "onelake://MyWorkspace/MyLakehouse/Files"
+        assert path == "MyWorkspace / MyLakehouse / Files"
 
     def test_named_path_for_file(self):
         file_path = f"{self.ITEM_ID}/Files/data.csv"
         rel = file_path.split("/", 1)[-1]
         path = self._make_named_path(self.WS_NAME, self.ITEM_NAME, rel)
-        assert path == "onelake://MyWorkspace/MyLakehouse/Files/data.csv"
+        assert path == "MyWorkspace / MyLakehouse / Files/data.csv"
 
     def test_named_path_for_table(self):
         path = self._make_named_path(self.WS_NAME, self.ITEM_NAME, "Tables/customers")
-        assert path == "onelake://MyWorkspace/MyLakehouse/Tables/customers"
+        assert path == "MyWorkspace / MyLakehouse / Tables/customers"
 
     def test_abfss_path_for_folder(self):
         directory = f"{self.ITEM_ID}/Files"
