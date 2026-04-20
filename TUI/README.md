@@ -80,6 +80,7 @@ uv run onelake-tui
 | `Tab` / `Shift+Tab` | Switch panels |
 | `y` | Open copy menu (HTTPS/ABFSS, named/GUID) |
 | `Ctrl+F` | Toggle footer visibility |
+| `S` | Save SVG screenshot to current directory |
 | `r` | Refresh |
 | `?` | Show help |
 | `q` | Quit |
