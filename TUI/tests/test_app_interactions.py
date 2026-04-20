@@ -593,6 +593,31 @@ async def test_named_uri_builders_encode_special_characters():
 
 
 @pytest.mark.asyncio
+async def test_guid_uri_builders_use_node_workspace_id():
+    """GUID URI builders should use workspace from the selected node, not tree state."""
+    app, _ = _create_app_harness()
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        tree = app.query_one("#tree", OneLakeTree)
+        tree._current_workspace_id = ""
+
+        file_node = FileNode(
+            workspace="ws-guid-from-node",
+            path="item-guid/Files/data.csv",
+            size=1,
+        )
+
+        host = DEFAULT_ENVIRONMENT.dfs_host
+        assert app._node_to_https_guid(file_node) == (
+            f"https://{host}/ws-guid-from-node/item-guid/Files/data.csv"
+        )
+        assert app._node_to_abfss_guid(file_node) == (
+            f"abfss://ws-guid-from-node@{host}/item-guid/Files/data.csv"
+        )
+
+
+@pytest.mark.asyncio
 async def test_copy_to_clipboard_uses_platform_command():
     """macOS path should use pbcopy command."""
     app, _ = _create_app_harness()

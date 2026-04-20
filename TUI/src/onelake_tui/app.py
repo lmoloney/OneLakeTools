@@ -368,7 +368,11 @@ class OneLakeApp(App):
                 return
             uri = builder(node.data)
             if not uri:
-                self.notify("Couldn't generate a URI for the selected item", severity="warning", markup=False)
+                self.notify(
+                    "Couldn't generate a URI for the selected item",
+                    severity="warning",
+                    markup=False,
+                )
                 return
             self._copy_to_clipboard(uri, format_key.replace("_", " ").upper())
 
@@ -418,16 +422,14 @@ class OneLakeApp(App):
         """Build an HTTPS DFS URL using GUIDs."""
         if self.client is None:
             return None
-        tree = self.query_one("#tree", OneLakeTree)
-        ws_id = tree._current_workspace_id
         host = self.client.env.dfs_host
 
         if isinstance(data, FolderNode):
-            return f"https://{host}/{ws_id}/{data.directory}"
+            return f"https://{host}/{data.workspace}/{data.directory}"
         elif isinstance(data, FileNode):
-            return f"https://{host}/{ws_id}/{data.path}"
+            return f"https://{host}/{data.workspace}/{data.path}"
         elif isinstance(data, TableNode):
-            return f"https://{host}/{ws_id}/{data.item_path}/Tables/{data.table_name}"
+            return f"https://{host}/{data.workspace}/{data.item_path}/Tables/{data.table_name}"
         return None
 
     def _node_to_abfss_named(self, data: object) -> str | None:
@@ -458,16 +460,14 @@ class OneLakeApp(App):
         """Build an abfss:// URI using GUIDs."""
         if self.client is None:
             return None
-        tree = self.query_one("#tree", OneLakeTree)
-        ws_id = tree._current_workspace_id
         host = self.client.env.dfs_host
 
         if isinstance(data, FolderNode):
-            return f"abfss://{ws_id}@{host}/{data.directory}"
+            return f"abfss://{data.workspace}@{host}/{data.directory}"
         elif isinstance(data, FileNode):
-            return f"abfss://{ws_id}@{host}/{data.path}"
+            return f"abfss://{data.workspace}@{host}/{data.path}"
         elif isinstance(data, TableNode):
-            return f"abfss://{ws_id}@{host}/{data.item_path}/Tables/{data.table_name}"
+            return f"abfss://{data.workspace}@{host}/{data.item_path}/Tables/{data.table_name}"
         return None
 
     def action_refresh(self) -> None:
