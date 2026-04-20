@@ -36,6 +36,24 @@ Built with [Textual](https://textual.textualize.io/) and an async Python client 
 - **Toggleable footer** — `Ctrl+F` hides/shows the status bar
 - **Zero config** — uses `az login`, no service keys or config files required
 
+## Roadmap (linked issues)
+
+Roadmap source of truth: [`../README.md#roadmap`](../README.md#roadmap)
+
+| Area | Status |
+|------|--------|
+| OneLake TUI (Unofficial) | ✅ Working (browse, preview, inspect, copy path) |
+| File preview (MD/JSON/CSV/Parquet/Avro) | ✅ Done |
+| Delta table detail (schema/data/history/CDF) | ✅ Done |
+| Workspace search/filter | ✅ Done |
+| [OneLake CLI](https://github.com/lmoloney/OneLakeTools/issues/11) | 🔲 Planned (`onelake ls`, `onelake cat`, `onelake cp`) |
+| [Download/upload](https://github.com/lmoloney/OneLakeTools/issues/12) | 🔲 Planned |
+| [Shortcuts discoverability/manageability](https://github.com/lmoloney/OneLakeTools/issues/13) | 🔲 Planned |
+| [ADLS direct connections](https://github.com/lmoloney/OneLakeTools/issues/14) | 🔲 Planned |
+| [OneLake security policy management](https://github.com/lmoloney/OneLakeTools/issues/15) | 🔲 Planned |
+| [Bulk operations](https://github.com/lmoloney/OneLakeTools/issues/16) | 🔲 Planned |
+| [Copying data + soft-deleted data handling](https://github.com/lmoloney/OneLakeTools/issues/17) | 🔲 Planned |
+
 ## Installation
 
 **Prerequisites:** Python 3.11+, Azure CLI (`az login`)

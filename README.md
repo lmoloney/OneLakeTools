@@ -114,9 +114,13 @@ OneLakeTools/
 | File preview (MD/JSON/CSV/Parquet/Avro) | ✅ Done |
 | Delta table detail (schema/data/history/CDF) | ✅ Done |
 | Workspace search/filter | ✅ Done |
-| OneLake CLI | 🔲 Planned (`onelake ls`, `onelake cat`, `onelake cp`) |
-| Download/upload | 🔲 Planned |
-| VSCode extension | 💭 Future |
+| [OneLake CLI](https://github.com/lmoloney/OneLakeTools/issues/11) | 🔲 Planned (`onelake ls`, `onelake cat`, `onelake cp`) |
+| [Download/upload](https://github.com/lmoloney/OneLakeTools/issues/12) | 🔲 Planned |
+| [Shortcuts discoverability/manageability](https://github.com/lmoloney/OneLakeTools/issues/13) | 🔲 Planned |
+| [ADLS direct connections](https://github.com/lmoloney/OneLakeTools/issues/14) | 🔲 Planned |
+| [OneLake security policy management](https://github.com/lmoloney/OneLakeTools/issues/15) | 🔲 Planned |
+| [Bulk operations](https://github.com/lmoloney/OneLakeTools/issues/16) | 🔲 Planned |
+| [Copying data + soft-deleted data handling](https://github.com/lmoloney/OneLakeTools/issues/17) | 🔲 Planned |
 
 ## License
 
