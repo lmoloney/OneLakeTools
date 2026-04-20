@@ -425,11 +425,14 @@ class OneLakeApp(App):
         host = self.client.env.dfs_host
 
         if isinstance(data, FolderNode):
-            return f"https://{host}/{data.workspace}/{data.directory}"
+            return f"https://{host}/{data.workspace}/{self._encode_path(data.directory)}"
         elif isinstance(data, FileNode):
-            return f"https://{host}/{data.workspace}/{data.path}"
+            return f"https://{host}/{data.workspace}/{self._encode_path(data.path)}"
         elif isinstance(data, TableNode):
-            return f"https://{host}/{data.workspace}/{data.item_path}/Tables/{data.table_name}"
+            return (
+                f"https://{host}/{data.workspace}/{data.item_path}/Tables/"
+                f"{self._encode_path(data.table_name)}"
+            )
         return None
 
     def _node_to_abfss_named(self, data: object) -> str | None:
@@ -463,11 +466,14 @@ class OneLakeApp(App):
         host = self.client.env.dfs_host
 
         if isinstance(data, FolderNode):
-            return f"abfss://{data.workspace}@{host}/{data.directory}"
+            return f"abfss://{data.workspace}@{host}/{self._encode_path(data.directory)}"
         elif isinstance(data, FileNode):
-            return f"abfss://{data.workspace}@{host}/{data.path}"
+            return f"abfss://{data.workspace}@{host}/{self._encode_path(data.path)}"
         elif isinstance(data, TableNode):
-            return f"abfss://{data.workspace}@{host}/{data.item_path}/Tables/{data.table_name}"
+            return (
+                f"abfss://{data.workspace}@{host}/{data.item_path}/Tables/"
+                f"{self._encode_path(data.table_name)}"
+            )
         return None
 
     def action_refresh(self) -> None:
