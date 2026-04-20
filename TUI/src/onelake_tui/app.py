@@ -367,8 +367,10 @@ class OneLakeApp(App):
             if builder is None:
                 return
             uri = builder(node.data)
-            if uri:
-                self._copy_to_clipboard(uri, format_key.replace("_", " ").upper())
+            if not uri:
+                self.notify("Couldn't generate a URI for the selected item", severity="warning", markup=False)
+                return
+            self._copy_to_clipboard(uri, format_key.replace("_", " ").upper())
 
         self.push_screen(CopyFormatMenu(), callback=_on_format_chosen)
 
