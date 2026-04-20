@@ -8,6 +8,7 @@ import logging
 import platform
 import subprocess
 from pathlib import Path
+from urllib.parse import quote
 
 from textual import work
 from textual.app import App, ComposeResult
@@ -335,6 +336,16 @@ class OneLakeApp(App):
         normalized = path.rstrip("/")
         return normalized.split("/", 1)[-1] if "/" in normalized else normalized
 
+    @staticmethod
+    def _encode_segment(value: str) -> str:
+        """Percent-encode a single URI segment."""
+        return quote(value, safe="")
+
+    @staticmethod
+    def _encode_path(value: str) -> str:
+        """Percent-encode a URI path while preserving path separators."""
+        return quote(value, safe="/")
+
     def action_copy(self) -> None:
         """Open copy-format menu and copy the selected URI to clipboard."""
         tree = self.query_one("#tree", OneLakeTree)
@@ -385,15 +396,20 @@ class OneLakeApp(App):
         ws_name = tree._current_workspace_name or "?"
         item_name = tree._current_item.display_name if tree._current_item else "?"
         host = self.client.env.dfs_host
+        ws_name_enc = self._encode_segment(ws_name)
+        item_name_enc = self._encode_segment(item_name)
 
         if isinstance(data, FolderNode):
             rel = self._relative_item_path(data.directory)
-            return f"https://{host}/{ws_name}/{item_name}/{rel}"
+            return f"https://{host}/{ws_name_enc}/{item_name_enc}/{self._encode_path(rel)}"
         elif isinstance(data, FileNode):
             rel = self._relative_item_path(data.path)
-            return f"https://{host}/{ws_name}/{item_name}/{rel}"
+            return f"https://{host}/{ws_name_enc}/{item_name_enc}/{self._encode_path(rel)}"
         elif isinstance(data, TableNode):
-            return f"https://{host}/{ws_name}/{item_name}/Tables/{data.table_name}"
+            return (
+                f"https://{host}/{ws_name_enc}/{item_name_enc}/Tables/"
+                f"{self._encode_path(data.table_name)}"
+            )
         return None
 
     def _node_to_https_guid(self, data: object) -> str | None:
@@ -420,15 +436,20 @@ class OneLakeApp(App):
         ws_name = tree._current_workspace_name or "?"
         item_name = tree._current_item.display_name if tree._current_item else "?"
         host = self.client.env.dfs_host
+        ws_name_enc = self._encode_segment(ws_name)
+        item_name_enc = self._encode_segment(item_name)
 
         if isinstance(data, FolderNode):
             rel = self._relative_item_path(data.directory)
-            return f"abfss://{ws_name}@{host}/{item_name}/{rel}"
+            return f"abfss://{ws_name_enc}@{host}/{item_name_enc}/{self._encode_path(rel)}"
         elif isinstance(data, FileNode):
             rel = self._relative_item_path(data.path)
-            return f"abfss://{ws_name}@{host}/{item_name}/{rel}"
+            return f"abfss://{ws_name_enc}@{host}/{item_name_enc}/{self._encode_path(rel)}"
         elif isinstance(data, TableNode):
-            return f"abfss://{ws_name}@{host}/{item_name}/Tables/{data.table_name}"
+            return (
+                f"abfss://{ws_name_enc}@{host}/{item_name_enc}/Tables/"
+                f"{self._encode_path(data.table_name)}"
+            )
         return None
 
     def _node_to_abfss_guid(self, data: object) -> str | None:

@@ -561,6 +561,38 @@ async def test_uri_builders_return_none_without_client():
 
 
 @pytest.mark.asyncio
+async def test_named_uri_builders_percent_encode_workspace_item_and_paths():
+    """Named URI builders should percent-encode unsafe chars in workspace/item/path segments."""
+    app, _ = _create_app_harness()
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        tree = app.query_one("#tree", OneLakeTree)
+        tree._current_workspace_name = "My Workspace/West"
+        tree._current_workspace_id = "ws-guid-123"
+        tree._current_item = Item(id="item-guid", display_name="Lake#1", type="Lakehouse")
+
+        file_node = FileNode(
+            workspace="ws-guid-123",
+            path="item-guid/Files/raw data/file #1.csv",
+            size=1,
+        )
+        table_node = TableNode(
+            workspace="ws-guid-123",
+            item_path="item-guid",
+            table_name="dbo/my table#1",
+        )
+
+        host = DEFAULT_ENVIRONMENT.dfs_host
+        assert app._node_to_https_named(file_node) == (
+            f"https://{host}/My%20Workspace%2FWest/Lake%231/Files/raw%20data/file%20%231.csv"
+        )
+        assert app._node_to_abfss_named(table_node) == (
+            f"abfss://My%20Workspace%2FWest@{host}/Lake%231/Tables/dbo/my%20table%231"
+        )
+
+
+@pytest.mark.asyncio
 async def test_copy_to_clipboard_uses_platform_command():
     """macOS path should use pbcopy command."""
     app, _ = _create_app_harness()

@@ -28,6 +28,7 @@ from textual.widgets import (
 )
 
 from onelake_client import OneLakeClient
+from onelake_client.exceptions import FileTooLargeError
 from onelake_tui.nodes import FileNode, FolderNode, TableNode
 from onelake_tui.sprite import OneLakeSprite, get_welcome
 
@@ -565,23 +566,42 @@ class DetailPanel(VerticalScroll):
         if not parquet_files:
             raise FileNotFoundError("No parquet files found in table directory")
 
-        # Read the first (largest) parquet file that stays within preview size limits.
-        parquet_files.sort(key=lambda p: p.content_length or 0, reverse=True)
-        target = next(
-            (p for p in parquet_files if (p.content_length or 0) <= _MAX_BINARY_BYTES),
-            None,
+        # Prefer larger known-size parquet files first, then unknown-size files.
+        parquet_files.sort(
+            key=lambda p: (p.content_length is not None, p.content_length or 0),
+            reverse=True,
         )
-        if target is None:
+        size_filtered = [
+            p
+            for p in parquet_files
+            if p.content_length is None or p.content_length <= _MAX_BINARY_BYTES
+        ]
+        if not size_filtered:
             raise ValueError(
                 f"No parquet files are within the {_format_size(_MAX_BINARY_BYTES)} preview limit"
             )
-        raw = await self.client.dfs.read_file(
-            data.workspace,
-            target.name,
-            max_bytes=_MAX_BINARY_BYTES,
+
+        for target in size_filtered:
+            try:
+                raw = await self.client.dfs.read_file(
+                    data.workspace,
+                    target.name,
+                    max_bytes=_MAX_BINARY_BYTES,
+                )
+            except FileTooLargeError:
+                logger.debug(
+                    "Skipping parquet candidate over preview limit despite "
+                    "missing/incorrect size: %s",
+                    target.name,
+                )
+                continue
+
+            pf = pq.ParquetFile(io.BytesIO(raw))
+            return pf.read_row_groups([0]).slice(0, 100)
+
+        raise ValueError(
+            f"No parquet files are within the {_format_size(_MAX_BINARY_BYTES)} preview limit"
         )
-        pf = pq.ParquetFile(io.BytesIO(raw))
-        return pf.read_row_groups([0]).slice(0, 100)
 
     @work(group="detail_aux", exclusive=True)
     async def _load_cdf_preview(self) -> None:
