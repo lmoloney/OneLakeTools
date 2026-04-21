@@ -136,9 +136,20 @@ TUI/src/
 3. Add the `--env` choice to the CLI arg parser in `onelake_tui/app.py`.
 4. Token scopes do NOT change per ring — only hostnames differ (see [ADR-003](../docs/decisions/003-shared-token-scopes.md)).
 
+## Changelog
+
+Update `CHANGELOG.md` under `[Unreleased]` for every user-facing change. Follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format with `Added`, `Changed`, `Fixed`, `Removed` sections. Reference the GitHub issue number where applicable (e.g. `(#19)`).
+
 ## Decision Records
 
 Architecture decisions live in [`docs/decisions/`](../docs/decisions/). Lightweight ADR format with YAML front matter (id, title, status, date, tags). When making architectural decisions, create a new record numbered sequentially.
+
+## Documentation
+
+When a change affects user-facing behavior, CLI flags, keybindings, or supported file formats, update the relevant docs:
+- `README.md` for usage, installation, or feature descriptions
+- `docs/runbooks/` for operational procedures
+- `.github/copilot-instructions.md` if the change affects project structure, conventions, or module responsibilities
 
 ## Debugging
 
