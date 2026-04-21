@@ -206,6 +206,32 @@ class DfsClient:
 
         return response.content
 
+    async def read_file_tail(self, workspace: str, path: str, tail_bytes: int) -> bytes:
+        """Read the last *tail_bytes* bytes of a file using an HTTP Range request.
+
+        Used for efficiently reading parquet file footers without downloading
+        the entire file.
+
+        Args:
+            workspace: Workspace name or GUID.
+            path: Full path within the workspace.
+            tail_bytes: Number of bytes to read from the end of the file.
+
+        Returns:
+            The last *tail_bytes* bytes of the file.
+        """
+        client = await self._get_client()
+        headers = _dfs_headers(self._auth.dfs_headers())
+        headers["Range"] = f"bytes=-{tail_bytes}"
+
+        response = await request_with_retry(
+            client,
+            "GET",
+            f"{self._base_url}/{workspace}/{path}",
+            headers=headers,
+        )
+        return response.content
+
     async def read_file_stream(
         self, workspace: str, path: str, *, chunk_size: int = 65536
     ) -> AsyncIterator[bytes]:

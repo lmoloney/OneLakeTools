@@ -303,6 +303,12 @@ class DetailPanel(VerticalScroll):
             await txn_pane.mount(LoadingIndicator(id="txn-loading"))
             self._load_transaction_log(data)
 
+            # ── Analysis tab ────────────────────────────────────────────
+            analysis_pane = TabPane("Analysis", id="tab-analysis")
+            await tc.add_pane(analysis_pane)
+            await analysis_pane.mount(LoadingIndicator(id="analysis-loading"))
+            self._load_analysis(data)
+
             # ── CDF tab (conditional) ───────────────────────────────────
             cdf_enabled = info.properties.get("delta.enableChangeDataFeed") == "true"
             if cdf_enabled:
@@ -463,12 +469,196 @@ class DetailPanel(VerticalScroll):
                 pass
             logger.debug("Transaction log load failed: %s", e)
 
+    @work(group="detail_aux", exclusive=True)
+    async def _load_analysis(self, data: TableNode) -> None:
+        """Load full delta analysis: Summary, Parquet Files, Row Groups, Column Chunks, Columns."""
+        table_data = self._current_table_data
+
+        try:
+            analysis_pane = self.query_one("#tab-analysis", TabPane)
+
+            # Replace loading indicator with a lazy-load button (analysis is expensive)
+            with contextlib.suppress(NoMatches):
+                self.query_one("#analysis-loading").remove()
+
+            if self._current_table_data is not table_data:
+                return
+
+            await analysis_pane.mount(
+                Button("Run Analysis", id="load-analysis", variant="primary")
+            )
+            await analysis_pane.mount(
+                Static(
+                    "[dim]Reads parquet footers for each file — "
+                    "row groups, column chunks, and column stats[/dim]",
+                    classes="detail-section",
+                )
+            )
+
+        except Exception as e:
+            with contextlib.suppress(NoMatches):
+                self.query_one("#analysis-loading").remove()
+            logger.debug("Analysis init failed: %s", e)
+
+    @work(group="detail_aux", exclusive=True)
+    async def _run_analysis(self) -> None:
+        """Execute the full delta analysis after the user clicks 'Run Analysis'."""
+        table_data = self._current_table_data
+        if table_data is None:
+            return
+
+        analysis_pane = self.query_one("#tab-analysis", TabPane)
+
+        # Clear button + description
+        for child in list(analysis_pane.children):
+            child.remove()
+
+        progress_label = Static(
+            "Analysing file 1 of …", id="analysis-progress", classes="detail-section"
+        )
+        await analysis_pane.mount(progress_label)
+
+        async def _progress(current: int, total: int, filename: str) -> None:
+            if self._current_table_data is not table_data:
+                return
+            with contextlib.suppress(NoMatches):
+                self.query_one("#analysis-progress", Static).update(
+                    f"[dim]Analysing file {current} of {total}: {esc(filename)}[/dim]"
+                )
+
+        try:
+            result = await self.client.delta.get_analysis(
+                table_data.workspace,
+                table_data.item_path,
+                table_data.table_name,
+                self.client.dfs,
+                progress_callback=_progress,
+            )
+
+            if self._current_table_data is not table_data:
+                return
+
+            with contextlib.suppress(NoMatches):
+                self.query_one("#analysis-progress").remove()
+
+            s = result.summary
+
+            # ── Summary section ────────────────────────────────────────
+            await analysis_pane.mount(Label("Summary", classes="detail-title"))
+            summary_tbl = DataTable()
+            await analysis_pane.mount(summary_tbl)
+            summary_tbl.add_columns("Metric", "Value")
+            summary_tbl.add_row("Row count", f"{s.row_count:,}")
+            summary_tbl.add_row("Parquet files", f"{s.parquet_files:,}")
+            summary_tbl.add_row("Row groups", f"{s.row_groups:,}")
+            summary_tbl.add_row("Avg rows / row group", f"{s.avg_rows_per_row_group:,.0f}")
+            summary_tbl.add_row("Min rows / row group", f"{s.min_rows_per_row_group:,}")
+            summary_tbl.add_row("Max rows / row group", f"{s.max_rows_per_row_group:,}")
+            summary_tbl.add_row("Total compressed size", _format_size(s.total_compressed_size))
+            if s.files_skipped:
+                summary_tbl.add_row(
+                    "⚠ Files skipped", f"{s.files_skipped} ({esc(s.files_skipped_reason)})"
+                )
+
+            # ── Parquet Files section ─────────────────────────────────
+            if result.parquet_files:
+                await analysis_pane.mount(Label("Parquet Files", classes="detail-title"))
+                pf_tbl = DataTable()
+                await analysis_pane.mount(pf_tbl)
+                pf_tbl.add_columns(
+                    "File", "Row Count", "Row Groups", "Created By"
+                )
+                for pf in result.parquet_files:
+                    pf_tbl.add_row(
+                        esc(pf.parquet_file),
+                        f"{pf.row_count:,}",
+                        str(pf.row_groups),
+                        esc(pf.created_by),
+                    )
+
+            # ── Row Groups section ────────────────────────────────────
+            if result.row_groups:
+                await analysis_pane.mount(Label("Row Groups", classes="detail-title"))
+                rg_tbl = DataTable()
+                await analysis_pane.mount(rg_tbl)
+                rg_tbl.add_columns(
+                    "File", "RG", "Row Count",
+                    "Compressed", "Uncompressed", "Ratio", "% of Rows",
+                )
+                for rg in result.row_groups:
+                    ratio_pct = f"{rg.compression_ratio * 100:.1f}%"
+                    row_pct = f"{rg.ratio_of_total_rows:.2f}%"
+                    rg_tbl.add_row(
+                        esc(rg.parquet_file),
+                        str(rg.row_group_id),
+                        f"{rg.row_count:,}",
+                        _format_size(rg.compressed_size),
+                        _format_size(rg.uncompressed_size),
+                        ratio_pct,
+                        row_pct,
+                    )
+
+            # ── Column Chunks section ─────────────────────────────────
+            if result.column_chunks:
+                await analysis_pane.mount(Label("Column Chunks", classes="detail-title"))
+                cc_tbl = DataTable()
+                await analysis_pane.mount(cc_tbl)
+                cc_tbl.add_columns(
+                    "File", "RG", "Col", "Name", "Type",
+                    "Compressed", "Uncompressed", "Has Dict", "Values", "Encodings",
+                )
+                for cc in result.column_chunks:
+                    cc_tbl.add_row(
+                        esc(cc.parquet_file),
+                        str(cc.row_group_id),
+                        str(cc.column_id),
+                        esc(cc.column_name),
+                        esc(cc.column_type),
+                        _format_size(cc.compressed_size),
+                        _format_size(cc.uncompressed_size),
+                        "✓" if cc.has_dict else "✗",
+                        f"{cc.value_count:,}",
+                        esc(cc.encodings),
+                    )
+
+            # ── Columns section ───────────────────────────────────────
+            if result.columns:
+                await analysis_pane.mount(Label("Columns", classes="detail-title"))
+                col_tbl = DataTable()
+                await analysis_pane.mount(col_tbl)
+                col_tbl.add_columns(
+                    "Column", "Type", "Compressed", "Uncompressed", "% of Table"
+                )
+                for col in result.columns:
+                    col_tbl.add_row(
+                        esc(col.column_name),
+                        esc(col.column_type),
+                        _format_size(col.compressed_size),
+                        _format_size(col.uncompressed_size),
+                        f"{col.size_percent_of_table:.1f}%",
+                    )
+
+        except Exception as e:
+            with contextlib.suppress(NoMatches):
+                self.query_one("#analysis-progress").remove()
+            try:
+                await analysis_pane.mount(
+                    Static(
+                        f"❌ Analysis failed: {esc(str(e))}", classes="detail-section"
+                    )
+                )
+            except Exception:
+                pass
+            logger.debug("Analysis run failed: %s", e)
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle lazy-load buttons in delta table tabs."""
         if event.button.id == "load-data-preview":
             self._load_data_preview()
         elif event.button.id == "load-cdf-preview":
             self._load_cdf_preview()
+        elif event.button.id == "load-analysis":
+            self._run_analysis()
 
     @work(group="detail_aux", exclusive=True)
     async def _load_data_preview(self) -> None:
