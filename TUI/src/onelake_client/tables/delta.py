@@ -48,6 +48,40 @@ def _schema_to_columns(schema) -> list[Column]:
     return columns
 
 
+def _coerce_timestamps(table):
+    """Downcast timestamp[ns] columns to timestamp[us] to avoid Arrow cast errors.
+
+    Parquet files written with nanosecond-precision timestamps (or corrupt
+    sentinel values) cause ``ArrowInvalid: Casting from timestamp[ns] to
+    timestamp[us, tz=UTC] would lose data`` when pyarrow reads them.
+    We cast with ``safe=False`` so out-of-range values become null rather
+    than crashing the preview.
+    """
+    import pyarrow as pa
+
+    new_columns = []
+    needs_cast = False
+    for i in range(table.num_columns):
+        field = table.schema.field(i)
+        if pa.types.is_timestamp(field.type) and field.type.unit == "ns":
+            target_type = pa.timestamp("us", tz=field.type.tz)
+            new_columns.append((i, table.column(i).cast(target_type, safe=False)))
+            needs_cast = True
+
+    if not needs_cast:
+        return table
+
+    for col_idx, new_col in new_columns:
+        field = table.schema.field(col_idx)
+        target_type = pa.timestamp("us", tz=field.type.tz)
+        table = table.set_column(
+            col_idx,
+            field.with_type(target_type),
+            new_col,
+        )
+    return table
+
+
 # ── Subprocess workers (top-level for pickling) ────────────────────────
 
 
@@ -283,7 +317,8 @@ class DeltaTableReader:
 
         def _head():
             ds = dt.to_pyarrow_dataset()
-            return ds.head(limit)
+            table = ds.head(limit)
+            return _coerce_timestamps(table)
 
         return await asyncio.to_thread(_head)
 

@@ -14,6 +14,7 @@ from onelake_client.models.table import DeltaTableInfo
 from onelake_client.tables.delta import (
     DeltaTableReader,
     _build_table_uri,
+    _coerce_timestamps,
     _run_delta_subprocess,
     _schema_to_columns,
 )
@@ -531,6 +532,69 @@ class TestRunDeltaSubprocess:
 
         assert result["ok"] is False
         assert "No files in log" in result["error"]
+
+
+# ── _coerce_timestamps ──────────────────────────────────────────────────
+
+
+class TestCoerceTimestamps:
+    """Test that ns-precision timestamps are safely downcast to us."""
+
+    def test_no_op_without_timestamp_ns(self):
+        """Tables without timestamp[ns] columns pass through unchanged."""
+        import pyarrow as pa
+
+        table = pa.table({"x": [1, 2, 3], "y": ["a", "b", "c"]})
+        result = _coerce_timestamps(table)
+        assert result.equals(table)
+
+    def test_casts_ns_to_us(self):
+        """timestamp[ns] columns are cast to timestamp[us]."""
+        import pyarrow as pa
+
+        arr = pa.array([1_000_000_000, 2_000_000_000], type=pa.timestamp("ns"))
+        table = pa.table({"ts": arr, "val": [10, 20]})
+        result = _coerce_timestamps(table)
+
+        assert result.schema.field("ts").type == pa.timestamp("us")
+        assert result.schema.field("val").type == pa.int64()
+        assert result.column("ts").to_pylist() == [
+            pa.array([1_000_000_000], type=pa.timestamp("ns")).cast(pa.timestamp("us"))[0].as_py(),
+            pa.array([2_000_000_000], type=pa.timestamp("ns")).cast(pa.timestamp("us"))[0].as_py(),
+        ]
+
+    def test_preserves_tz(self):
+        """Timezone is preserved during the cast."""
+        import pyarrow as pa
+
+        arr = pa.array([1_000_000_000], type=pa.timestamp("ns", tz="UTC"))
+        table = pa.table({"ts": arr})
+        result = _coerce_timestamps(table)
+
+        assert result.schema.field("ts").type == pa.timestamp("us", tz="UTC")
+
+    def test_corrupt_value_does_not_crash(self):
+        """Wildly out-of-range ns values don't raise — the exact bug from the screenshot."""
+        import pyarrow as pa
+
+        # Value that fits in int64 but overflows when cast ns→us with safe=True
+        corrupt_val = -(2**62)
+        arr = pa.array([corrupt_val], type=pa.timestamp("ns"))
+        table = pa.table({"ts": arr})
+        # safe=False means this won't raise
+        result = _coerce_timestamps(table)
+        assert result.num_rows == 1
+        assert result.schema.field("ts").type == pa.timestamp("us")
+
+    def test_leaves_us_timestamps_alone(self):
+        """timestamp[us] columns are not touched."""
+        import pyarrow as pa
+
+        arr = pa.array([1_000_000], type=pa.timestamp("us"))
+        table = pa.table({"ts": arr})
+        result = _coerce_timestamps(table)
+        assert result.schema.field("ts").type == pa.timestamp("us")
+        assert result.equals(table)
 
 
 # ── DeltaTableReader.read_sample ────────────────────────────────────────

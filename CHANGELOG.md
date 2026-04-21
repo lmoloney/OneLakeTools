@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Data preview crash on Delta tables with nanosecond-precision timestamps — `timestamp[ns]` columns are now safely downcast to `timestamp[us]`, with out-of-range values rendered as null (#19)
+
 ## [0.3.0] - 2026-04-20
 
 ### Changed

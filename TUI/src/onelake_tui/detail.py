@@ -29,6 +29,7 @@ from textual.widgets import (
 
 from onelake_client import OneLakeClient
 from onelake_client.exceptions import FileTooLargeError
+from onelake_client.tables.delta import _coerce_timestamps
 from onelake_tui.nodes import FileNode, FolderNode, TableNode
 from onelake_tui.sprite import OneLakeSprite, get_welcome
 
@@ -600,7 +601,8 @@ class DetailPanel(VerticalScroll):
                 continue
 
             pf = pq.ParquetFile(io.BytesIO(raw))
-            return pf.read_row_groups([0]).slice(0, 100)
+            sample = pf.read_row_groups([0]).slice(0, 100)
+            return _coerce_timestamps(sample)
 
         raise ValueError(over_limit_msg)
 
@@ -810,7 +812,7 @@ class DetailPanel(VerticalScroll):
                 schema_table.add_row(field.name, str(field.type), "✓" if field.nullable else "✗")
 
             # Sample data (first 100 rows)
-            sample = pf.read_row_groups([0]).slice(0, 100)
+            sample = _coerce_timestamps(pf.read_row_groups([0]).slice(0, 100))
             self.mount(Label("Data (first 100 rows)", classes="detail-title"))
             data_table = DataTable(classes="preview-content")
             self.mount(data_table)
