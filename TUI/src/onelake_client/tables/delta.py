@@ -51,11 +51,13 @@ def _schema_to_columns(schema) -> list[Column]:
 def _coerce_timestamps(table):
     """Downcast timestamp[ns] columns to timestamp[us] to avoid Arrow cast errors.
 
-    Parquet files written with nanosecond-precision timestamps (or corrupt
-    sentinel values) cause ``ArrowInvalid: Casting from timestamp[ns] to
-    timestamp[us, tz=UTC] would lose data`` when pyarrow reads them.
-    We cast with ``safe=False`` so out-of-range values become null rather
-    than crashing the preview.
+    Parquet files written with nanosecond-precision timestamps can trigger
+    ``ArrowInvalid: Casting from timestamp[ns] to timestamp[us, tz=UTC]
+    would lose data`` when pyarrow reads them.
+
+    We cast with ``safe=False`` so the lossy ns→us downcast is allowed
+    instead of raising. This truncates sub-microsecond precision; it does
+    not implicitly convert invalid or out-of-range values to null.
     """
     import pyarrow as pa
 
