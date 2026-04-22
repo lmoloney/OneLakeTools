@@ -318,6 +318,8 @@ class DeltaTableReader:
         def _head():
             ds = dt.to_pyarrow_dataset()
             table = ds.head(limit)
+            if not hasattr(table, "num_columns") or not hasattr(table, "schema"):
+                return table
             return _coerce_timestamps(table)
 
         return await asyncio.to_thread(_head)
