@@ -26,7 +26,7 @@ jobs:
           else
             echo "::error::CHANGELOG.md was not updated. Please add an entry under [Unreleased]."
             echo ""
-            echo "If this PR is docs-only or chore-only, add the 'chore' label to skip this check."
+            echo "If this PR is docs-only or chore-only, add the 'documentation' or 'chore' label to skip this check."
             exit 1
           fi
 
