@@ -577,14 +577,18 @@ class TestCoerceTimestamps:
         """Wildly out-of-range ns values don't raise — the exact bug from the screenshot."""
         import pyarrow as pa
 
-        # Value that fits in int64 but overflows when cast ns→us with safe=True
+        # Value that fits in int64 but is not divisible by 1000, so ns→us with
+        # safe=True would fail due to precision loss rather than overflow.
         corrupt_val = -(2**62)
         arr = pa.array([corrupt_val], type=pa.timestamp("ns"))
         table = pa.table({"ts": arr})
-        # safe=False means this won't raise
+        expected_ts = arr.cast(pa.timestamp("us"), safe=False)[0].as_py()
+        # _coerce_timestamps uses safe=False, so this should succeed and produce
+        # the same truncated timestamp value as Arrow's unsafe cast.
         result = _coerce_timestamps(table)
         assert result.num_rows == 1
         assert result.schema.field("ts").type == pa.timestamp("us")
+        assert result.column("ts").to_pylist() == [expected_ts]
 
     def test_leaves_us_timestamps_alone(self):
         """timestamp[us] columns are not touched."""
