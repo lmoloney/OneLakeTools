@@ -56,8 +56,8 @@ def coerce_timestamps(table):
     would lose data`` when pyarrow reads them.
 
     We cast with ``safe=False`` so the lossy ns→us downcast is allowed
-    instead of raising. This truncates sub-microsecond precision; it does
-    not implicitly convert invalid or out-of-range values to null.
+    instead of raising. For representable values this truncates
+    sub-microsecond precision.
     """
     import pyarrow as pa
 
@@ -84,6 +84,7 @@ def coerce_timestamps(table):
     return table
 
 
+# Backward-compatible alias kept for existing imports.
 _coerce_timestamps = coerce_timestamps
 
 
