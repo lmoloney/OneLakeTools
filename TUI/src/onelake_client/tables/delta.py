@@ -84,7 +84,7 @@ def coerce_timestamps(table):
     return table
 
 
-# Backward-compatible alias kept for existing imports.
+# Deprecated backward-compatible alias; use ``coerce_timestamps`` instead.
 _coerce_timestamps = coerce_timestamps
 
 
