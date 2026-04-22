@@ -557,7 +557,21 @@ class DetailPanel(VerticalScroll):
         self._data_preview_loaded = True
 
     async def _read_parquet_fallback(self, data: TableNode):
-        """Read parquet files directly via DFS when deltalake library fails."""
+        """
+        Selects a parquet file from a Delta table directory and returns a pyarrow Table sample with timestamps coerced.
+        
+        Searches the table's Tables/{table_name} directory for .parquet files, prefers files with known sizes (largest first), skips files exceeding the preview byte limit, and reads the first row group (up to 100 rows) from the first readable candidate. The resulting sample is post-processed to coerce timestamp-like columns to appropriate types.
+        
+        Parameters:
+            data (TableNode): Selected table node whose parquet files will be inspected.
+        
+        Returns:
+            pyarrow.Table: A table containing up to the first 100 rows from row group 0, with timestamps coerced.
+        
+        Raises:
+            FileNotFoundError: If no parquet files are found in the table directory.
+            ValueError: If no parquet files are within the configured preview size limit.
+        """
         import pyarrow.parquet as pq
 
         table_dir = f"{data.item_path}/Tables/{data.table_name}"
@@ -780,7 +794,11 @@ class DetailPanel(VerticalScroll):
             self.mount(Static(f"❌ CSV parse error: {esc(str(e))}", classes="detail-section"))
 
     async def _preview_parquet(self, data: FileNode) -> None:
-        """Read parquet file with pyarrow and display schema + sample rows."""
+        """
+        Render a Parquet file's schema and a sample of up to the first 100 rows into the detail panel.
+        
+        If PyArrow is available, reads the file from the DFS, extracts schema and metadata, mounts a schema table and a data table with the first row group (up to 100 rows) after coercing timestamp columns. If PyArrow is not installed or an error occurs, removes the loading indicator and mounts an explanatory error message.
+        """
         try:
             import pyarrow.parquet as pq
 

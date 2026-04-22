@@ -32,7 +32,17 @@ def _build_table_uri(workspace: str, item_path: str, table_name: str, dfs_host: 
 
 
 def _schema_to_columns(schema) -> list[Column]:
-    """Convert a deltalake Schema to our Column model."""
+    """
+    Convert a deltalake schema or iterable of fields into a list of Column objects.
+    
+    Parameters:
+        schema: A deltalake `Schema` instance or any iterable of field-like objects with
+            attributes `name`, `type`, `nullable`, and `metadata`.
+    
+    Returns:
+        A list of `Column` instances with `name`, stringified `type`, `nullable`, and
+        `metadata` (or `None` when empty).
+    """
     columns: list[Column] = []
     # deltalake >= 0.18: Schema is not directly iterable, use .fields
     fields = schema.fields if hasattr(schema, "fields") else schema
@@ -49,13 +59,16 @@ def _schema_to_columns(schema) -> list[Column]:
 
 
 def _coerce_timestamps(table):
-    """Downcast timestamp[ns] columns to timestamp[us] to avoid Arrow cast errors.
-
-    Parquet files written with nanosecond-precision timestamps (or corrupt
-    sentinel values) cause ``ArrowInvalid: Casting from timestamp[ns] to
-    timestamp[us, tz=UTC] would lose data`` when pyarrow reads them.
-    We cast with ``safe=False`` so out-of-range values become null rather
-    than crashing the preview.
+    """
+    Downcast pyarrow Table timestamp columns with unit "ns" to unit "us" to avoid casting errors.
+    
+    Scans the table schema for timestamp columns whose unit is "ns" and replaces each with a microsecond-precision timestamp preserving timezone when present. Casts are performed with `safe=False` so values that cannot be represented at microsecond precision are converted to null instead of raising an error.
+    
+    Parameters:
+        table (pyarrow.Table): The table to inspect and, if needed, modify.
+    
+    Returns:
+        pyarrow.Table: The original table if no nanosecond timestamps were found, otherwise a new table with affected columns converted to `timestamp[us]` (timezone preserved).
     """
     import pyarrow as pa
 
@@ -316,6 +329,14 @@ class DeltaTableReader:
         dt = await asyncio.to_thread(self._load_table_sync, uri)
 
         def _head():
+            """
+            Return the first rows from the Delta table dataset with timestamp columns normalized.
+            
+            Returns:
+                pyarrow.Table: A table containing the first `limit` rows where any `timestamp[ns]`
+                columns have been converted to `timestamp[us]` (timezone preserved) and values
+                that cannot be safely cast are replaced with null.
+            """
             ds = dt.to_pyarrow_dataset()
             table = ds.head(limit)
             return _coerce_timestamps(table)

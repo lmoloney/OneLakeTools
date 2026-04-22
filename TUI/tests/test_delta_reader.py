@@ -574,7 +574,11 @@ class TestCoerceTimestamps:
         assert result.schema.field("ts").type == pa.timestamp("us", tz="UTC")
 
     def test_corrupt_value_does_not_crash(self):
-        """Wildly out-of-range ns values don't raise — the exact bug from the screenshot."""
+        """
+        Ensures extremely out-of-range nanosecond timestamp values do not raise when coerced and are downcast to microsecond precision.
+        
+        Verifies that a timestamp value that would overflow when cast from `timestamp[ns]` to `timestamp[us]` with strict/safe casting is handled without exception by `_coerce_timestamps`, and that the resulting column type is `timestamp[us]`.
+        """
         import pyarrow as pa
 
         # Value that fits in int64 but overflows when cast ns→us with safe=True
