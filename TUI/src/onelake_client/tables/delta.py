@@ -48,7 +48,7 @@ def _schema_to_columns(schema) -> list[Column]:
     return columns
 
 
-def _coerce_timestamps(table):
+def coerce_timestamps(table):
     """Downcast timestamp[ns] columns to timestamp[us] to avoid Arrow cast errors.
 
     Parquet files written with nanosecond-precision timestamps can trigger
@@ -82,6 +82,9 @@ def _coerce_timestamps(table):
             new_col,
         )
     return table
+
+
+_coerce_timestamps = coerce_timestamps
 
 
 # ── Subprocess workers (top-level for pickling) ────────────────────────
@@ -322,7 +325,7 @@ class DeltaTableReader:
             table = ds.head(limit)
             if not hasattr(table, "num_columns") or not hasattr(table, "schema"):
                 return table
-            return _coerce_timestamps(table)
+            return coerce_timestamps(table)
 
         return await asyncio.to_thread(_head)
 

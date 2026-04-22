@@ -14,9 +14,9 @@ from onelake_client.models.table import DeltaTableInfo
 from onelake_client.tables.delta import (
     DeltaTableReader,
     _build_table_uri,
-    _coerce_timestamps,
     _run_delta_subprocess,
     _schema_to_columns,
+    coerce_timestamps,
 )
 
 # ── Fixtures ────────────────────────────────────────────────────────────
@@ -534,7 +534,7 @@ class TestRunDeltaSubprocess:
         assert "No files in log" in result["error"]
 
 
-# ── _coerce_timestamps ──────────────────────────────────────────────────
+# ── coerce_timestamps ───────────────────────────────────────────────────
 
 
 class TestCoerceTimestamps:
@@ -545,7 +545,7 @@ class TestCoerceTimestamps:
         import pyarrow as pa
 
         table = pa.table({"x": [1, 2, 3], "y": ["a", "b", "c"]})
-        result = _coerce_timestamps(table)
+        result = coerce_timestamps(table)
         assert result.equals(table)
 
     def test_casts_ns_to_us(self):
@@ -554,7 +554,7 @@ class TestCoerceTimestamps:
 
         arr = pa.array([1_000_000_000, 2_000_000_000], type=pa.timestamp("ns"))
         table = pa.table({"ts": arr, "val": [10, 20]})
-        result = _coerce_timestamps(table)
+        result = coerce_timestamps(table)
 
         assert result.schema.field("ts").type == pa.timestamp("us")
         assert result.schema.field("val").type == pa.int64()
@@ -569,7 +569,7 @@ class TestCoerceTimestamps:
 
         arr = pa.array([1_000_000_000], type=pa.timestamp("ns", tz="UTC"))
         table = pa.table({"ts": arr})
-        result = _coerce_timestamps(table)
+        result = coerce_timestamps(table)
 
         assert result.schema.field("ts").type == pa.timestamp("us", tz="UTC")
 
@@ -583,9 +583,9 @@ class TestCoerceTimestamps:
         arr = pa.array([corrupt_val], type=pa.timestamp("ns"))
         table = pa.table({"ts": arr})
         expected_ts = arr.cast(pa.timestamp("us"), safe=False)[0].as_py()
-        # _coerce_timestamps uses safe=False, so this should succeed and produce
+        # coerce_timestamps uses safe=False, so this should succeed and produce
         # the same truncated timestamp value as Arrow's unsafe cast.
-        result = _coerce_timestamps(table)
+        result = coerce_timestamps(table)
         assert result.num_rows == 1
         assert result.schema.field("ts").type == pa.timestamp("us")
         assert result.column("ts").to_pylist() == [expected_ts]
@@ -596,7 +596,7 @@ class TestCoerceTimestamps:
 
         arr = pa.array([1_000_000], type=pa.timestamp("us"))
         table = pa.table({"ts": arr})
-        result = _coerce_timestamps(table)
+        result = coerce_timestamps(table)
         assert result.schema.field("ts").type == pa.timestamp("us")
         assert result.equals(table)
 
