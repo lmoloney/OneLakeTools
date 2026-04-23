@@ -97,6 +97,7 @@ TUI/src/
 - Only API hostnames change per ring. See [ADR-003](../docs/decisions/003-shared-token-scopes.md)
 - MSIT Fabric REST: `msitapi.fabric.microsoft.com` (NOT `api.msit.fabric.microsoft.com`)
 - Delta abfss:// URIs must use the correct DFS host per ring (passed from `FabricEnvironment.dfs_host`)
+- `coerce_timestamps()` from `onelake_client.tables` must be applied after reading pyarrow Tables from Delta/Parquet to handle `timestamp[ns]` → `timestamp[us]` schema mismatches. If `ds.head()` raises `ArrowInvalid`, fall back to reading fragments with their physical schema first.
 
 ### Rich Markup Safety
 - All dynamic values in `Static()` widgets MUST be wrapped with `rich.markup.escape()`

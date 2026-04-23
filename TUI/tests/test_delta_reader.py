@@ -629,6 +629,22 @@ class TestCoerceTimestamps:
         assert result.column("ts").to_pylist()[0] is not None
         assert result.schema.field("ts").type == pa.timestamp("us")
 
+    def test_preexisting_nulls_survive(self):
+        """Pre-existing None values in timestamp[ns] columns are preserved."""
+        import pyarrow as pa
+
+        arr = pa.array(
+            [1_704_067_200_000_000_000, None, 1_000_000_000],
+            type=pa.timestamp("ns"),
+        )
+        table = pa.table({"ts": arr, "v": [1, 2, 3]})
+        result = coerce_timestamps(table)
+        ts_values = result.column("ts").to_pylist()
+        assert ts_values[0] is not None
+        assert ts_values[1] is None
+        assert ts_values[2] is not None
+        assert result.schema.field("ts").type == pa.timestamp("us")
+
 
 # ── _nullify_out_of_range ──────────────────────────────────────────────
 

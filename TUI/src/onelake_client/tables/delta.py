@@ -63,7 +63,7 @@ def _nullify_out_of_range(col, target_type):
     import pyarrow as pa
     import pyarrow.compute as pc
 
-    # Year 0001-01-01T00:00:00 and year 9999-12-31T23:59:59 in µs from epoch.
+    # Year 0001-01-01T00:00:00 and year 9999-12-31T23:59:59.999999 in µs from epoch.
     _MIN_US = -62_135_596_800_000_000
     _MAX_US = 253_402_300_799_999_999
 
@@ -89,7 +89,11 @@ def coerce_timestamps(table: pa.Table) -> pa.Table:
 
     We cast with ``safe=False`` so the lossy ns→us downcast is allowed
     instead of raising.  For representable values this truncates
-    sub-microsecond precision; out-of-range values are replaced with null.
+    sub-microsecond precision; timestamps outside year 0001–9999 are
+    defensively nullified via :func:`_nullify_out_of_range`.
+
+    If *table* is not a :class:`pyarrow.Table` (e.g. a test mock),
+    it is returned unchanged.
     """
     import pyarrow as pa
 
@@ -118,10 +122,6 @@ def coerce_timestamps(table: pa.Table) -> pa.Table:
             new_col,
         )
     return table
-
-
-# Deprecated backward-compatible alias; use ``coerce_timestamps`` instead.
-_coerce_timestamps = coerce_timestamps
 
 
 # ── Subprocess workers (top-level for pickling) ────────────────────────
@@ -364,21 +364,24 @@ class DeltaTableReader:
             try:
                 table = ds.head(limit)
             except pa.lib.ArrowInvalid as exc:
-                if "timestamp" not in str(exc).lower():
+                exc_msg = str(exc).lower()
+                if "timestamp[ns]" not in exc_msg or "would lose data" not in exc_msg:
                     raise
                 # Delta schema says timestamp[us] but parquet has timestamp[ns].
                 # Re-read fragments with their physical (parquet) schema to
                 # bypass the safe cast, then let coerce_timestamps handle it.
+                _MAX_FALLBACK_FRAGMENTS = 10
                 batches: list[pa.RecordBatch] = []
                 remaining = limit
-                for frag in ds.get_fragments():
-                    if remaining <= 0:
+                for frag_idx, frag in enumerate(ds.get_fragments()):
+                    if remaining <= 0 or frag_idx >= _MAX_FALLBACK_FRAGMENTS:
                         break
                     for batch in frag.to_batches(schema=frag.physical_schema):
                         if remaining <= 0:
                             break
-                        batches.append(batch.slice(0, remaining))
-                        remaining -= batch.num_rows
+                        sliced = batch.slice(0, remaining)
+                        batches.append(sliced)
+                        remaining -= sliced.num_rows
                 table = pa.Table.from_batches(batches) if batches else pa.table({})
             return coerce_timestamps(table)
 

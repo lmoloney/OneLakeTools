@@ -14,7 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Data preview crash on Delta tables with nanosecond-precision timestamps — `timestamp[ns]` columns are now safely downcast to `timestamp[us]`, with out-of-range values replaced by null (#19)
+- Data preview crash on Delta tables with nanosecond-precision timestamps — `timestamp[ns]` columns are now safely downcast to `timestamp[us]` with sub-microsecond precision truncated; timestamps outside year 0001–9999 are defensively nullified (#19)
 
 ## [0.3.0] - 2026-04-20
 
