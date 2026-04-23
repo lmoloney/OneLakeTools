@@ -517,6 +517,21 @@ class DeltaTableReader:
         if not result.get("ok"):
             raise DeltaError(result.get("error", "Unknown error resolving file list"))
 
+        # ── 1a. Build physical→logical column name mapping ──────────────
+        # Tables with delta.columnMapping.mode=id store columns in parquet
+        # using GUIDs (delta.columnMapping.physicalName) rather than the
+        # logical names visible in the Delta schema.
+        phys_to_logical: dict[str, str] = {}
+        try:
+            meta_info = await self.get_metadata(workspace, item_path, table_name)
+            for col in meta_info.schema_:
+                if col.metadata:
+                    phys = col.metadata.get("delta.columnMapping.physicalName")
+                    if phys is not None:
+                        phys_to_logical[str(phys)] = col.name
+        except Exception as exc:
+            logger.debug("Could not load schema for column name mapping: %s", exc)
+
         # List parquet files in the table directory via DFS (current active files)
         table_dir = f"{item_path}/Tables/{table_name}"
         dfs_paths = await dfs_client.list_paths(workspace, table_dir)
@@ -629,13 +644,14 @@ class DeltaTableReader:
                     rg_compressed += col.total_compressed_size
                     rg_uncompressed += col.total_uncompressed_size
 
+                    logical_name = phys_to_logical.get(col.path_in_schema, col.path_in_schema)
                     encodings = ", ".join(str(e) for e in col.encodings) if col.encodings else ""
                     column_chunk_infos.append(
                         ColumnChunkInfo(
                             parquet_file=file_name,
                             row_group_id=rg_idx + 1,
                             column_id=col_idx,
-                            column_name=col.path_in_schema,
+                            column_name=logical_name,
                             column_type=col.physical_type,
                             compressed_size=col.total_compressed_size,
                             uncompressed_size=col.total_uncompressed_size,
