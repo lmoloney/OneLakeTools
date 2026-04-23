@@ -50,6 +50,36 @@ def _schema_to_columns(schema) -> list[Column]:
     return columns
 
 
+def _nullify_out_of_range(col, target_type):
+    """Replace timestamps outside year 0001–9999 with null.
+
+    After a ``safe=False`` cast, corrupt sentinel values may map to
+    dates far outside any reasonable range.  This helper nullifies
+    them so the preview shows ``null`` instead of garbage.
+
+    Bounds are expressed as microseconds-from-epoch and scaled to
+    the target unit so the same logic works for ``us``, ``ms``, and ``s``.
+    """
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    # Year 0001-01-01T00:00:00 and year 9999-12-31T23:59:59 in µs from epoch.
+    _MIN_US = -62_135_596_800_000_000
+    _MAX_US = 253_402_300_799_999_999
+
+    _SCALE = {"us": 1, "ms": 1_000, "s": 1_000_000}
+    scale = _SCALE.get(target_type.unit)
+    if scale is None:
+        return col
+
+    lo = _MIN_US // scale
+    hi = _MAX_US // scale
+
+    int_view = col.cast(pa.int64())
+    valid = pc.and_(pc.greater_equal(int_view, lo), pc.less_equal(int_view, hi))
+    return pc.if_else(valid, col, pa.scalar(None, type=target_type))
+
+
 def coerce_timestamps(table: pa.Table) -> pa.Table:
     """Downcast timestamp[ns] columns to timestamp[us] to avoid Arrow cast errors.
 
@@ -58,10 +88,13 @@ def coerce_timestamps(table: pa.Table) -> pa.Table:
     would lose data`` when pyarrow reads them.
 
     We cast with ``safe=False`` so the lossy ns→us downcast is allowed
-    instead of raising. For representable values this truncates
-    sub-microsecond precision.
+    instead of raising.  For representable values this truncates
+    sub-microsecond precision; out-of-range values are replaced with null.
     """
     import pyarrow as pa
+
+    if not isinstance(table, pa.Table):
+        return table
 
     new_columns = []
     needs_cast = False
@@ -69,7 +102,8 @@ def coerce_timestamps(table: pa.Table) -> pa.Table:
         field = table.schema.field(i)
         if pa.types.is_timestamp(field.type) and field.type.unit == "ns":
             target_type = pa.timestamp("us", tz=field.type.tz)
-            new_columns.append((i, table.column(i).cast(target_type, safe=False)))
+            cast_col = table.column(i).cast(target_type, safe=False)
+            new_columns.append((i, _nullify_out_of_range(cast_col, target_type)))
             needs_cast = True
 
     if not needs_cast:
@@ -325,10 +359,7 @@ class DeltaTableReader:
 
         def _head():
             ds = dt.to_pyarrow_dataset()
-            table = ds.head(limit)
-            if not hasattr(table, "num_columns") or not hasattr(table, "schema"):
-                return table
-            return coerce_timestamps(table)
+            return coerce_timestamps(ds.head(limit))
 
         return await asyncio.to_thread(_head)
 

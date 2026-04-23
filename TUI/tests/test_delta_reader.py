@@ -14,6 +14,7 @@ from onelake_client.models.table import DeltaTableInfo
 from onelake_client.tables.delta import (
     DeltaTableReader,
     _build_table_uri,
+    _nullify_out_of_range,
     _run_delta_subprocess,
     _schema_to_columns,
     coerce_timestamps,
@@ -600,8 +601,105 @@ class TestCoerceTimestamps:
         assert result.schema.field("ts").type == pa.timestamp("us")
         assert result.equals(table)
 
+    def test_non_pyarrow_table_passes_through(self):
+        """Non-pyarrow objects (e.g. MagicMock) are returned unchanged."""
+        sentinel = MagicMock(name="not-a-table")
+        assert coerce_timestamps(sentinel) is sentinel
 
-# ── DeltaTableReader.read_sample ────────────────────────────────────────
+    def test_out_of_range_values_nullified(self):
+        """Timestamps outside year 0001–9999 become null after coercion."""
+        import pyarrow as pa
+
+        # int64 max as timestamp[ns] represents year ~2262 — within range.
+        # After ns→us cast (÷1000), it stays in range, so it should survive.
+        arr_in_range = pa.array([2**62], type=pa.timestamp("ns"))
+        table_ok = pa.table({"ts": arr_in_range})
+        result = coerce_timestamps(table_ok)
+        assert result.column("ts").to_pylist()[0] is not None
+
+    def test_ns_values_within_valid_range_survive(self):
+        """Normal ns timestamps survive coercion with correct values."""
+        import pyarrow as pa
+
+        # 2024-01-01T00:00:00 in nanoseconds from epoch
+        ns_val = 1_704_067_200_000_000_000
+        arr = pa.array([ns_val], type=pa.timestamp("ns"))
+        table = pa.table({"ts": arr})
+        result = coerce_timestamps(table)
+        assert result.column("ts").to_pylist()[0] is not None
+        assert result.schema.field("ts").type == pa.timestamp("us")
+
+
+# ── _nullify_out_of_range ──────────────────────────────────────────────
+
+
+class TestNullifyOutOfRange:
+    """Test that out-of-range timestamps are replaced with null."""
+
+    def test_in_range_values_preserved(self):
+        """Timestamps within year 0001–9999 are preserved."""
+        import pyarrow as pa
+
+        # 2024-01-01 in µs from epoch
+        arr = pa.array([1_704_067_200_000_000], type=pa.timestamp("us"))
+        result = _nullify_out_of_range(arr, pa.timestamp("us"))
+        assert result.to_pylist() == arr.to_pylist()
+
+    def test_extreme_positive_nullified(self):
+        """int64 max as timestamp[us] (year ~294247) is nullified."""
+        import pyarrow as pa
+
+        arr = pa.array([2**63 - 1], type=pa.int64()).cast(pa.timestamp("us"))
+        result = _nullify_out_of_range(arr, pa.timestamp("us"))
+        assert result[0].as_py() is None
+
+    def test_extreme_negative_nullified(self):
+        """int64 min as timestamp[us] (year ~-294215) is nullified."""
+        import pyarrow as pa
+
+        arr = pa.array([-(2**63 - 1)], type=pa.int64()).cast(pa.timestamp("us"))
+        result = _nullify_out_of_range(arr, pa.timestamp("us"))
+        assert result[0].as_py() is None
+
+    def test_boundary_year_0001_preserved(self):
+        """Timestamp at year 0001-01-01 is within range."""
+        import pyarrow as pa
+
+        # Year 0001-01-01T00:00:00 = -62135596800 seconds from epoch
+        us_val = -62_135_596_800_000_000
+        arr = pa.array([us_val], type=pa.timestamp("us"))
+        result = _nullify_out_of_range(arr, pa.timestamp("us"))
+        assert result[0].as_py() is not None
+
+    def test_boundary_year_9999_preserved(self):
+        """Timestamp at year 9999-12-31 is within range."""
+        import pyarrow as pa
+
+        us_val = 253_402_300_799_999_999
+        arr = pa.array([us_val], type=pa.timestamp("us"))
+        result = _nullify_out_of_range(arr, pa.timestamp("us"))
+        assert result[0].as_py() is not None
+
+    def test_preserves_tz(self):
+        """Timezone-aware timestamps are handled correctly."""
+        import pyarrow as pa
+
+        arr = pa.array([2**63 - 1], type=pa.int64()).cast(pa.timestamp("us", tz="UTC"))
+        result = _nullify_out_of_range(arr, pa.timestamp("us", tz="UTC"))
+        assert result[0].as_py() is None
+        assert result.type == pa.timestamp("us", tz="UTC")
+
+    def test_mixed_valid_and_invalid(self):
+        """Mix of valid and out-of-range values: only out-of-range become null."""
+        import pyarrow as pa
+
+        valid_us = 1_704_067_200_000_000  # 2024-01-01
+        invalid_us = 2**63 - 1  # far future
+        arr = pa.array([valid_us, invalid_us], type=pa.int64()).cast(pa.timestamp("us"))
+        result = _nullify_out_of_range(arr, pa.timestamp("us"))
+        values = result.to_pylist()
+        assert values[0] is not None
+        assert values[1] is None
 
 
 class TestReadSample:

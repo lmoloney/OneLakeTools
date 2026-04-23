@@ -6,9 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `coerce_timestamps` public helper in `onelake_client.tables` for safely downcasting `timestamp[ns]` columns to `timestamp[us]`
+- CI job that enforces `CHANGELOG.md` updates on user-facing PRs (skip with `chore` or `documentation` label)
+- Code-review instructions (`.github/instructions/code-review.instructions.md`) covering changelog, docs, Rich markup, and pyarrow conventions
+
 ### Fixed
 
-- Data preview crash on Delta tables with nanosecond-precision timestamps — `timestamp[ns]` columns are now safely downcast to `timestamp[us]`, with out-of-range values rendered as null (#19)
+- Data preview crash on Delta tables with nanosecond-precision timestamps — `timestamp[ns]` columns are now safely downcast to `timestamp[us]`, with out-of-range values replaced by null (#19)
 
 ## [0.3.0] - 2026-04-20
 
