@@ -358,8 +358,27 @@ class DeltaTableReader:
         dt = await asyncio.to_thread(self._load_table_sync, uri)
 
         def _head():
+            import pyarrow as pa
+
             ds = dt.to_pyarrow_dataset()
-            return coerce_timestamps(ds.head(limit))
+            try:
+                table = ds.head(limit)
+            except pa.lib.ArrowInvalid:
+                # Delta schema says timestamp[us] but parquet has timestamp[ns].
+                # Re-read fragments with their physical (parquet) schema to
+                # bypass the safe cast, then let coerce_timestamps handle it.
+                batches: list[pa.RecordBatch] = []
+                remaining = limit
+                for frag in ds.get_fragments():
+                    if remaining <= 0:
+                        break
+                    for batch in frag.to_batches(schema=frag.physical_schema):
+                        if remaining <= 0:
+                            break
+                        batches.append(batch.slice(0, remaining))
+                        remaining -= batch.num_rows
+                table = pa.Table.from_batches(batches) if batches else pa.table({})
+            return coerce_timestamps(table)
 
         return await asyncio.to_thread(_head)
 

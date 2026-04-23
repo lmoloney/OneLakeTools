@@ -799,6 +799,39 @@ class TestReadSample:
         ]
         mock_dataset.head.assert_called_once_with(1)
 
+    @pytest.mark.asyncio()
+    async def test_read_sample_arrow_invalid_fallback(self, auth):
+        """read_sample falls back to fragment reads on ArrowInvalid."""
+        import pyarrow as pa
+
+        # Simulate: ds.head() raises ArrowInvalid (schema mismatch)
+        mock_dataset = MagicMock()
+        mock_dataset.head.side_effect = pa.lib.ArrowInvalid(
+            "Casting from timestamp[ns] to timestamp[us, tz=UTC] would lose data"
+        )
+
+        # Fragment returns ns batch via physical schema
+        ns_arr = pa.array([-4852116231933723624], type=pa.timestamp("ns", tz="UTC"))
+        batch = pa.record_batch({"ts": ns_arr, "v": pa.array([1])})
+
+        mock_fragment = MagicMock()
+        mock_fragment.physical_schema = batch.schema
+        mock_fragment.to_batches.return_value = iter([batch])
+
+        mock_dataset.get_fragments.return_value = iter([mock_fragment])
+
+        dt_mock = MagicMock()
+        dt_mock.to_pyarrow_dataset.return_value = mock_dataset
+
+        reader = DeltaTableReader(auth)
+        with self._patch_reader(reader, dt_mock):
+            result = await reader.read_sample("ws", "LH.Lakehouse", "t", limit=100)
+
+        # Should have coerced ns → us
+        assert result.schema.field("ts").type == pa.timestamp("us", tz="UTC")
+        assert result.num_rows == 1
+        mock_fragment.to_batches.assert_called_once_with(schema=batch.schema)
+
 
 # ── DeltaTableReader.read_cdf ───────────────────────────────────────────
 
