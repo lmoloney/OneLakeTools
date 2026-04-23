@@ -9,6 +9,8 @@ from deltalake.exceptions import DeltaError
 from onelake_client.models.table import Column, DeltaTableInfo
 
 if TYPE_CHECKING:
+    import pyarrow as pa
+
     from onelake_client.auth import OneLakeAuth
 
 logger = logging.getLogger("onelake_client.tables.delta")
@@ -46,6 +48,80 @@ def _schema_to_columns(schema) -> list[Column]:
             )
         )
     return columns
+
+
+def _nullify_out_of_range(col, target_type):
+    """Replace timestamps outside year 0001–9999 with null.
+
+    After a ``safe=False`` cast, corrupt sentinel values may map to
+    dates far outside any reasonable range.  This helper nullifies
+    them so the preview shows ``null`` instead of garbage.
+
+    Bounds are expressed as microseconds-from-epoch and scaled to
+    the target unit so the same logic works for ``us``, ``ms``, and ``s``.
+    """
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    # Year 0001-01-01T00:00:00 and year 9999-12-31T23:59:59.999999 in µs from epoch.
+    _MIN_US = -62_135_596_800_000_000
+    _MAX_US = 253_402_300_799_999_999
+
+    _SCALE = {"us": 1, "ms": 1_000, "s": 1_000_000}
+    scale = _SCALE.get(target_type.unit)
+    if scale is None:
+        return col
+
+    lo = _MIN_US // scale
+    hi = _MAX_US // scale
+
+    int_view = col.cast(pa.int64())
+    valid = pc.and_(pc.greater_equal(int_view, lo), pc.less_equal(int_view, hi))
+    return pc.if_else(valid, col, pa.scalar(None, type=target_type))
+
+
+def coerce_timestamps(table: pa.Table) -> pa.Table:
+    """Downcast timestamp[ns] columns to timestamp[us] to avoid Arrow cast errors.
+
+    Parquet files written with nanosecond-precision timestamps can trigger
+    ``ArrowInvalid: Casting from timestamp[ns] to timestamp[us, tz=UTC]
+    would lose data`` when pyarrow reads them.
+
+    We cast with ``safe=False`` so the lossy ns→us downcast is allowed
+    instead of raising.  For representable values this truncates
+    sub-microsecond precision; timestamps outside year 0001–9999 are
+    defensively nullified via :func:`_nullify_out_of_range`.
+
+    If *table* is not a :class:`pyarrow.Table` (e.g. a test mock),
+    it is returned unchanged.
+    """
+    import pyarrow as pa
+
+    if not isinstance(table, pa.Table):
+        return table
+
+    new_columns = []
+    needs_cast = False
+    for i in range(table.num_columns):
+        field = table.schema.field(i)
+        if pa.types.is_timestamp(field.type) and field.type.unit == "ns":
+            target_type = pa.timestamp("us", tz=field.type.tz)
+            cast_col = table.column(i).cast(target_type, safe=False)
+            new_columns.append((i, _nullify_out_of_range(cast_col, target_type)))
+            needs_cast = True
+
+    if not needs_cast:
+        return table
+
+    for col_idx, new_col in new_columns:
+        field = table.schema.field(col_idx)
+        target_type = pa.timestamp("us", tz=field.type.tz)
+        table = table.set_column(
+            col_idx,
+            field.with_type(target_type),
+            new_col,
+        )
+    return table
 
 
 # ── Subprocess workers (top-level for pickling) ────────────────────────
@@ -282,8 +358,36 @@ class DeltaTableReader:
         dt = await asyncio.to_thread(self._load_table_sync, uri)
 
         def _head():
+            import pyarrow as pa
+
             ds = dt.to_pyarrow_dataset()
-            return ds.head(limit)
+            try:
+                table = ds.head(limit)
+            except pa.lib.ArrowInvalid as exc:
+                exc_msg = str(exc).lower()
+                if "timestamp[ns]" not in exc_msg or "would lose data" not in exc_msg:
+                    raise
+                # Delta schema says timestamp[us] but parquet has timestamp[ns].
+                # Re-read fragments with their physical (parquet) schema to
+                # bypass the safe cast, then let coerce_timestamps handle it.
+                _MAX_FALLBACK_FRAGMENTS = 10
+                batches: list[pa.RecordBatch] = []
+                remaining = limit
+                for frag_idx, frag in enumerate(ds.get_fragments()):
+                    if remaining <= 0 or frag_idx >= _MAX_FALLBACK_FRAGMENTS:
+                        break
+                    for batch in frag.to_batches(schema=frag.physical_schema):
+                        if remaining <= 0:
+                            break
+                        sliced = batch.slice(0, remaining)
+                        batches.append(sliced)
+                        remaining -= sliced.num_rows
+                table = (
+                    pa.Table.from_batches(batches)
+                    if batches
+                    else pa.table({f.name: pa.array([], type=f.type) for f in ds.schema})
+                )
+            return coerce_timestamps(table)
 
         return await asyncio.to_thread(_head)
 

@@ -14,8 +14,10 @@ from onelake_client.models.table import DeltaTableInfo
 from onelake_client.tables.delta import (
     DeltaTableReader,
     _build_table_uri,
+    _nullify_out_of_range,
     _run_delta_subprocess,
     _schema_to_columns,
+    coerce_timestamps,
 )
 
 # ── Fixtures ────────────────────────────────────────────────────────────
@@ -533,7 +535,187 @@ class TestRunDeltaSubprocess:
         assert "No files in log" in result["error"]
 
 
-# ── DeltaTableReader.read_sample ────────────────────────────────────────
+# ── coerce_timestamps ───────────────────────────────────────────────────
+
+
+class TestCoerceTimestamps:
+    """Test that ns-precision timestamps are safely downcast to us."""
+
+    def test_no_op_without_timestamp_ns(self):
+        """Tables without timestamp[ns] columns pass through unchanged."""
+        import pyarrow as pa
+
+        table = pa.table({"x": [1, 2, 3], "y": ["a", "b", "c"]})
+        result = coerce_timestamps(table)
+        assert result.equals(table)
+
+    def test_casts_ns_to_us(self):
+        """timestamp[ns] columns are cast to timestamp[us]."""
+        import pyarrow as pa
+
+        arr = pa.array([1_000_000_000, 2_000_000_000], type=pa.timestamp("ns"))
+        table = pa.table({"ts": arr, "val": [10, 20]})
+        result = coerce_timestamps(table)
+
+        assert result.schema.field("ts").type == pa.timestamp("us")
+        assert result.schema.field("val").type == pa.int64()
+        assert result.column("ts").to_pylist() == [
+            pa.array([1_000_000_000], type=pa.timestamp("ns")).cast(pa.timestamp("us"))[0].as_py(),
+            pa.array([2_000_000_000], type=pa.timestamp("ns")).cast(pa.timestamp("us"))[0].as_py(),
+        ]
+
+    def test_preserves_tz(self):
+        """Timezone is preserved during the cast."""
+        import pyarrow as pa
+
+        arr = pa.array([1_000_000_000], type=pa.timestamp("ns", tz="UTC"))
+        table = pa.table({"ts": arr})
+        result = coerce_timestamps(table)
+
+        assert result.schema.field("ts").type == pa.timestamp("us", tz="UTC")
+
+    def test_in_range_ns_precision_truncation_does_not_crash(self):
+        """In-range ns values that fail safe=True are truncated safely (not nullified)."""
+        import pyarrow as pa
+
+        # In-range int64/timestamp[ns] value that is not divisible by 1000, so
+        # safe=True would fail due to precision loss rather than overflow.
+        in_range_precision_loss_val = -(2**62)
+        arr = pa.array([in_range_precision_loss_val], type=pa.timestamp("ns"))
+        table = pa.table({"ts": arr})
+        expected_ts = arr.cast(pa.timestamp("us"), safe=False)[0].as_py()
+        # coerce_timestamps uses safe=False, so this should succeed and produce
+        # the same truncated timestamp value as Arrow's unsafe cast.
+        result = coerce_timestamps(table)
+        assert result.num_rows == 1
+        assert result.schema.field("ts").type == pa.timestamp("us")
+        assert result.column("ts").to_pylist() == [expected_ts]
+
+    def test_leaves_us_timestamps_alone(self):
+        """timestamp[us] columns are not touched."""
+        import pyarrow as pa
+
+        arr = pa.array([1_000_000], type=pa.timestamp("us"))
+        table = pa.table({"ts": arr})
+        result = coerce_timestamps(table)
+        assert result.schema.field("ts").type == pa.timestamp("us")
+        assert result.equals(table)
+
+    def test_non_pyarrow_table_passes_through(self):
+        """Non-pyarrow objects (e.g. MagicMock) are returned unchanged."""
+        sentinel = MagicMock(name="not-a-table")
+        assert coerce_timestamps(sentinel) is sentinel
+
+    def test_in_range_ns_values_survive_coercion(self):
+        """All int64 ns timestamps map to years 1677–2262 (within 0001–9999), so survive."""
+        import pyarrow as pa
+
+        # 2**62 is a large timestamp[ns] value (~year 1823) — within range.
+        # After ns→us cast (÷1000), it stays in range, so it should survive.
+        arr_in_range = pa.array([2**62], type=pa.timestamp("ns"))
+        table_ok = pa.table({"ts": arr_in_range})
+        result = coerce_timestamps(table_ok)
+        assert result.column("ts").to_pylist()[0] is not None
+
+    def test_ns_values_within_valid_range_survive(self):
+        """Normal ns timestamps survive coercion with correct values."""
+        import pyarrow as pa
+
+        # 2024-01-01T00:00:00 in nanoseconds from epoch
+        ns_val = 1_704_067_200_000_000_000
+        arr = pa.array([ns_val], type=pa.timestamp("ns"))
+        table = pa.table({"ts": arr})
+        result = coerce_timestamps(table)
+        assert result.column("ts").to_pylist()[0] is not None
+        assert result.schema.field("ts").type == pa.timestamp("us")
+
+    def test_preexisting_nulls_survive(self):
+        """Pre-existing None values in timestamp[ns] columns are preserved."""
+        import pyarrow as pa
+
+        arr = pa.array(
+            [1_704_067_200_000_000_000, None, 1_000_000_000],
+            type=pa.timestamp("ns"),
+        )
+        table = pa.table({"ts": arr, "v": [1, 2, 3]})
+        result = coerce_timestamps(table)
+        ts_values = result.column("ts").to_pylist()
+        assert ts_values[0] is not None
+        assert ts_values[1] is None
+        assert ts_values[2] is not None
+        assert result.schema.field("ts").type == pa.timestamp("us")
+
+
+# ── _nullify_out_of_range ──────────────────────────────────────────────
+
+
+class TestNullifyOutOfRange:
+    """Test that out-of-range timestamps are replaced with null."""
+
+    def test_in_range_values_preserved(self):
+        """Timestamps within year 0001–9999 are preserved."""
+        import pyarrow as pa
+
+        # 2024-01-01 in µs from epoch
+        arr = pa.array([1_704_067_200_000_000], type=pa.timestamp("us"))
+        result = _nullify_out_of_range(arr, pa.timestamp("us"))
+        assert result.to_pylist() == arr.to_pylist()
+
+    def test_extreme_positive_nullified(self):
+        """int64 max as timestamp[us] (year ~294247) is nullified."""
+        import pyarrow as pa
+
+        arr = pa.array([2**63 - 1], type=pa.int64()).cast(pa.timestamp("us"))
+        result = _nullify_out_of_range(arr, pa.timestamp("us"))
+        assert result[0].as_py() is None
+
+    def test_extreme_negative_nullified(self):
+        """int64 min as timestamp[us] (year ~-294215) is nullified."""
+        import pyarrow as pa
+
+        arr = pa.array([-(2**63)], type=pa.int64()).cast(pa.timestamp("us"))
+        result = _nullify_out_of_range(arr, pa.timestamp("us"))
+        assert result[0].as_py() is None
+
+    def test_boundary_year_0001_preserved(self):
+        """Timestamp at year 0001-01-01 is within range."""
+        import pyarrow as pa
+
+        # Year 0001-01-01T00:00:00 = -62135596800 seconds from epoch
+        us_val = -62_135_596_800_000_000
+        arr = pa.array([us_val], type=pa.timestamp("us"))
+        result = _nullify_out_of_range(arr, pa.timestamp("us"))
+        assert result[0].as_py() is not None
+
+    def test_boundary_year_9999_preserved(self):
+        """Timestamp at year 9999-12-31 is within range."""
+        import pyarrow as pa
+
+        us_val = 253_402_300_799_999_999
+        arr = pa.array([us_val], type=pa.timestamp("us"))
+        result = _nullify_out_of_range(arr, pa.timestamp("us"))
+        assert result[0].as_py() is not None
+
+    def test_preserves_tz(self):
+        """Timezone-aware timestamps are handled correctly."""
+        import pyarrow as pa
+
+        arr = pa.array([2**63 - 1], type=pa.int64()).cast(pa.timestamp("us", tz="UTC"))
+        result = _nullify_out_of_range(arr, pa.timestamp("us", tz="UTC"))
+        assert result[0].as_py() is None
+        assert result.type == pa.timestamp("us", tz="UTC")
+
+    def test_mixed_valid_and_invalid(self):
+        """Mix of valid and out-of-range values: only out-of-range become null."""
+        import pyarrow as pa
+
+        valid_us = 1_704_067_200_000_000  # 2024-01-01
+        invalid_us = 2**63 - 1  # far future
+        arr = pa.array([valid_us, invalid_us], type=pa.int64()).cast(pa.timestamp("us"))
+        result = _nullify_out_of_range(arr, pa.timestamp("us"))
+        values = result.to_pylist()
+        assert values[0] is not None
+        assert values[1] is None
 
 
 class TestReadSample:
@@ -608,6 +790,296 @@ class TestReadSample:
 
         assert result == mock_table
         assert result.num_rows == 0
+
+    @pytest.mark.asyncio()
+    async def test_read_sample_coerces_timestamp_ns(self, auth):
+        """read_sample coerces timestamp[ns] columns via coerce_timestamps."""
+        import pyarrow as pa
+
+        arr = pa.array([1_000_000_001], type=pa.timestamp("ns"))
+        table = pa.table({"ts": arr, "v": [1]})
+
+        mock_dataset = MagicMock()
+        mock_dataset.head.return_value = table
+
+        dt_mock = MagicMock()
+        dt_mock.to_pyarrow_dataset.return_value = mock_dataset
+
+        reader = DeltaTableReader(auth)
+        with self._patch_reader(reader, dt_mock):
+            result = await reader.read_sample("ws", "LH.Lakehouse", "t", limit=1)
+
+        assert result.schema.field("ts").type == pa.timestamp("us")
+        assert result.column("ts").to_pylist() == [
+            arr.cast(pa.timestamp("us"), safe=False)[0].as_py()
+        ]
+        mock_dataset.head.assert_called_once_with(1)
+
+    @pytest.mark.asyncio()
+    async def test_read_sample_arrow_invalid_fallback(self, auth):
+        """read_sample falls back to fragment reads on ArrowInvalid."""
+        import pyarrow as pa
+
+        # Simulate: ds.head() raises ArrowInvalid (schema mismatch)
+        mock_dataset = MagicMock()
+        mock_dataset.head.side_effect = pa.lib.ArrowInvalid(
+            "Casting from timestamp[ns] to timestamp[us, tz=UTC] would lose data"
+        )
+
+        # Fragment returns ns batch via physical schema
+        ns_arr = pa.array([-4852116231933723624], type=pa.timestamp("ns", tz="UTC"))
+        batch = pa.record_batch({"ts": ns_arr, "v": pa.array([1])})
+
+        mock_fragment = MagicMock()
+        mock_fragment.physical_schema = batch.schema
+        mock_fragment.to_batches.return_value = iter([batch])
+
+        mock_dataset.get_fragments.return_value = iter([mock_fragment])
+
+        dt_mock = MagicMock()
+        dt_mock.to_pyarrow_dataset.return_value = mock_dataset
+
+        reader = DeltaTableReader(auth)
+        with self._patch_reader(reader, dt_mock):
+            result = await reader.read_sample("ws", "LH.Lakehouse", "t", limit=100)
+
+        # Should have coerced ns → us
+        assert result.schema.field("ts").type == pa.timestamp("us", tz="UTC")
+        assert result.num_rows == 1
+        mock_fragment.to_batches.assert_called_once_with(schema=batch.schema)
+
+    @pytest.mark.asyncio()
+    async def test_read_sample_arrow_invalid_non_timestamp_propagates(self, auth):
+        """ArrowInvalid errors NOT from timestamp casting should propagate."""
+        import pyarrow as pa
+
+        mock_dataset = MagicMock()
+        mock_dataset.head.side_effect = pa.lib.ArrowInvalid("Integer overflow")
+
+        dt_mock = MagicMock()
+        dt_mock.to_pyarrow_dataset.return_value = mock_dataset
+
+        reader = DeltaTableReader(auth)
+        with (
+            self._patch_reader(reader, dt_mock),
+            pytest.raises(pa.lib.ArrowInvalid, match="Integer overflow"),
+        ):
+            await reader.read_sample("ws", "LH.Lakehouse", "t", limit=100)
+
+    @pytest.mark.asyncio()
+    async def test_read_sample_multi_fragment_respects_limit(self, auth):
+        """Fallback path reads across fragments and respects the limit."""
+        import pyarrow as pa
+
+        mock_dataset = MagicMock()
+        mock_dataset.head.side_effect = pa.lib.ArrowInvalid(
+            "Casting from timestamp[ns] to timestamp[us] would lose data"
+        )
+
+        # Two fragments, 3 rows each
+        def make_fragment(values):
+            arr = pa.array(values, type=pa.timestamp("ns"))
+            batch = pa.record_batch({"ts": arr})
+            frag = MagicMock()
+            frag.physical_schema = batch.schema
+            frag.to_batches.return_value = iter([batch])
+            return frag
+
+        frag1 = make_fragment([1_000_000_000, 2_000_000_000, 3_000_000_000])
+        frag2 = make_fragment([4_000_000_000, 5_000_000_000, 6_000_000_000])
+
+        mock_dataset.get_fragments.return_value = iter([frag1, frag2])
+
+        dt_mock = MagicMock()
+        dt_mock.to_pyarrow_dataset.return_value = mock_dataset
+
+        reader = DeltaTableReader(auth)
+        with self._patch_reader(reader, dt_mock):
+            result = await reader.read_sample("ws", "LH.Lakehouse", "t", limit=4)
+
+        assert result.num_rows == 4
+        assert result.schema.field("ts").type == pa.timestamp("us")
+
+    @pytest.mark.asyncio()
+    async def test_read_sample_fallback_stops_after_ten_fragments(self, auth):
+        """Fallback path reads at most 10 fragments even if limit is not met."""
+        import pyarrow as pa
+
+        mock_dataset = MagicMock()
+        mock_dataset.head.side_effect = pa.lib.ArrowInvalid(
+            "Casting from timestamp[ns] to timestamp[us] would lose data"
+        )
+
+        fragments = []
+        for i in range(12):
+            batch = pa.record_batch({"ts": pa.array([i], type=pa.timestamp("ns"))})
+            frag = MagicMock()
+            frag.physical_schema = batch.schema
+            frag.to_batches.return_value = iter([batch])
+            fragments.append(frag)
+
+        mock_dataset.get_fragments.return_value = iter(fragments)
+
+        dt_mock = MagicMock()
+        dt_mock.to_pyarrow_dataset.return_value = mock_dataset
+
+        reader = DeltaTableReader(auth)
+        with self._patch_reader(reader, dt_mock):
+            result = await reader.read_sample("ws", "LH.Lakehouse", "t", limit=100)
+
+        # Only first 10 fragments should be read
+        assert result.num_rows == 10
+        assert fragments[9].to_batches.called
+        assert not fragments[10].to_batches.called
+        assert not fragments[11].to_batches.called
+
+
+# ── End-to-end timestamp coercion (real parquet) ───────────────────────
+
+
+class TestTimestampCoercionE2E:
+    """End-to-end tests using real parquet files and pyarrow datasets.
+
+    These tests write actual parquet data with timestamp[ns] columns,
+    read through a dataset with a timestamp[us] schema (simulating
+    the Delta schema mismatch), and verify the full pipeline.
+    """
+
+    def test_dataset_schema_mismatch_triggers_arrow_invalid(self):
+        """Confirm that the schema mismatch actually causes ArrowInvalid."""
+        import tempfile
+
+        import pyarrow as pa
+        import pyarrow.dataset as pad
+        import pyarrow.parquet as pq
+
+        arr = pa.array([-4852116231933723624], type=pa.timestamp("ns", tz="UTC"))
+        table = pa.table({"ts": arr, "val": [1]})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = f"{tmp}/test.parquet"
+            pq.write_table(table, path)
+
+            us_schema = pa.schema(
+                [
+                    ("ts", pa.timestamp("us", tz="UTC")),
+                    ("val", pa.int64()),
+                ]
+            )
+            ds = pad.dataset(path, schema=us_schema)
+            with pytest.raises(pa.lib.ArrowInvalid, match="would lose data"):
+                ds.head(1)
+
+    def test_fragment_physical_schema_bypasses_cast(self):
+        """Reading fragments with physical schema preserves ns timestamps."""
+        import tempfile
+
+        import pyarrow as pa
+        import pyarrow.dataset as pad
+        import pyarrow.parquet as pq
+
+        problematic_val = -4852116231933723624
+        arr = pa.array([problematic_val], type=pa.timestamp("ns", tz="UTC"))
+        table = pa.table({"ts": arr, "val": [1]})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = f"{tmp}/test.parquet"
+            pq.write_table(table, path)
+
+            us_schema = pa.schema(
+                [
+                    ("ts", pa.timestamp("us", tz="UTC")),
+                    ("val", pa.int64()),
+                ]
+            )
+            ds = pad.dataset(path, schema=us_schema)
+
+            # Fragment-level read with physical schema should work
+            fragments = list(ds.get_fragments())
+            assert len(fragments) == 1
+
+            batches = list(fragments[0].to_batches(schema=fragments[0].physical_schema))
+            result = pa.Table.from_batches(batches)
+            assert result.schema.field("ts").type == pa.timestamp("ns", tz="UTC")
+            assert result.num_rows == 1
+
+    def test_full_pipeline_problematic_value(self):
+        """The exact value from production flows through fragment-read → coerce."""
+        import tempfile
+
+        import pyarrow as pa
+        import pyarrow.dataset as pad
+        import pyarrow.parquet as pq
+
+        problematic_val = -4852116231933723624
+        arr = pa.array([problematic_val], type=pa.timestamp("ns", tz="UTC"))
+        table = pa.table({"ts": arr, "val": [1]})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = f"{tmp}/test.parquet"
+            pq.write_table(table, path)
+
+            us_schema = pa.schema(
+                [
+                    ("ts", pa.timestamp("us", tz="UTC")),
+                    ("val", pa.int64()),
+                ]
+            )
+            ds = pad.dataset(path, schema=us_schema)
+
+            # Simulate the read_sample fallback path
+            fragments = list(ds.get_fragments())
+            batches = list(fragments[0].to_batches(schema=fragments[0].physical_schema))
+            raw_table = pa.Table.from_batches(batches)
+
+            # Apply coerce_timestamps (ns → us with safe=False + nullify)
+            result = coerce_timestamps(raw_table)
+            assert result.schema.field("ts").type == pa.timestamp("us", tz="UTC")
+            assert result.num_rows == 1
+            # Value should survive (it's year ~1816, within 0001–9999)
+            assert result.column("ts").to_pylist()[0] is not None
+
+    def test_full_pipeline_mixed_valid_and_problematic(self):
+        """Mix of normal and problematic ns timestamps all survive coercion."""
+        import tempfile
+
+        import pyarrow as pa
+        import pyarrow.dataset as pad
+        import pyarrow.parquet as pq
+
+        values = [
+            1_704_067_200_000_000_000,  # 2024-01-01 (normal)
+            -4852116231933723624,  # ~1816 (problematic for safe cast)
+            0,  # epoch
+        ]
+        arr = pa.array(values, type=pa.timestamp("ns", tz="UTC"))
+        table = pa.table({"ts": arr, "name": ["a", "b", "c"]})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = f"{tmp}/test.parquet"
+            pq.write_table(table, path)
+
+            us_schema = pa.schema(
+                [
+                    ("ts", pa.timestamp("us", tz="UTC")),
+                    ("name", pa.utf8()),
+                ]
+            )
+            ds = pad.dataset(path, schema=us_schema)
+
+            # Confirm it would fail without the fix
+            with pytest.raises(pa.lib.ArrowInvalid):
+                ds.head(3)
+
+            # Fragment-read → coerce should work
+            fragments = list(ds.get_fragments())
+            batches = list(fragments[0].to_batches(schema=fragments[0].physical_schema))
+            result = coerce_timestamps(pa.Table.from_batches(batches))
+
+            assert result.schema.field("ts").type == pa.timestamp("us", tz="UTC")
+            assert result.num_rows == 3
+            ts_values = result.column("ts").to_pylist()
+            assert all(v is not None for v in ts_values)
 
 
 # ── DeltaTableReader.read_cdf ───────────────────────────────────────────
