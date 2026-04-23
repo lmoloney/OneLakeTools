@@ -41,6 +41,19 @@ def _build_table_uri(workspace: str, item_path: str, table_name: str, dfs_host: 
     return f"abfss://{workspace}@{dfs_host}/{item_path}/Tables/{table_name}"
 
 
+def _clean_type_str(t) -> str:
+    """Return a human-readable type string from a deltalake type object.
+
+    deltalake >= 1.0 wraps primitive types as PrimitiveType("string") when
+    str()-ed. This extracts just the inner name for primitives and falls back
+    to the raw string for complex types (ArrayType, MapType, StructType).
+    """
+    # PrimitiveType exposes the plain name via its .type attribute
+    if hasattr(t, "type") and isinstance(getattr(t, "type"), str):
+        return t.type
+    return str(t)
+
+
 def _schema_to_columns(schema) -> list[Column]:
     """Convert a deltalake Schema to our Column model."""
     columns: list[Column] = []
@@ -50,7 +63,7 @@ def _schema_to_columns(schema) -> list[Column]:
         columns.append(
             Column(
                 name=field.name,
-                type=str(field.type),
+                type=_clean_type_str(field.type),
                 nullable=field.nullable,
                 metadata=field.metadata if field.metadata else None,
             )
@@ -77,7 +90,7 @@ try:
     columns = [
         {
             "name": f.name,
-            "type": str(f.type),
+            "type": f.type.type if (hasattr(f.type, "type") and isinstance(getattr(f.type, "type"), str)) else str(f.type),
             "nullable": f.nullable,
             "metadata": dict(f.metadata) if f.metadata else None,
         }
