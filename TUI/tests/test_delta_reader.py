@@ -909,10 +909,12 @@ class TestTimestampCoercionE2E:
             path = f"{tmp}/test.parquet"
             pq.write_table(table, path)
 
-            us_schema = pa.schema([
-                ("ts", pa.timestamp("us", tz="UTC")),
-                ("val", pa.int64()),
-            ])
+            us_schema = pa.schema(
+                [
+                    ("ts", pa.timestamp("us", tz="UTC")),
+                    ("val", pa.int64()),
+                ]
+            )
             ds = pad.dataset(path, schema=us_schema)
             with pytest.raises(pa.lib.ArrowInvalid, match="would lose data"):
                 ds.head(1)
@@ -933,10 +935,12 @@ class TestTimestampCoercionE2E:
             path = f"{tmp}/test.parquet"
             pq.write_table(table, path)
 
-            us_schema = pa.schema([
-                ("ts", pa.timestamp("us", tz="UTC")),
-                ("val", pa.int64()),
-            ])
+            us_schema = pa.schema(
+                [
+                    ("ts", pa.timestamp("us", tz="UTC")),
+                    ("val", pa.int64()),
+                ]
+            )
             ds = pad.dataset(path, schema=us_schema)
 
             # Fragment-level read with physical schema should work
@@ -964,10 +968,12 @@ class TestTimestampCoercionE2E:
             path = f"{tmp}/test.parquet"
             pq.write_table(table, path)
 
-            us_schema = pa.schema([
-                ("ts", pa.timestamp("us", tz="UTC")),
-                ("val", pa.int64()),
-            ])
+            us_schema = pa.schema(
+                [
+                    ("ts", pa.timestamp("us", tz="UTC")),
+                    ("val", pa.int64()),
+                ]
+            )
             ds = pad.dataset(path, schema=us_schema)
 
             # Simulate the read_sample fallback path
@@ -1002,10 +1008,12 @@ class TestTimestampCoercionE2E:
             path = f"{tmp}/test.parquet"
             pq.write_table(table, path)
 
-            us_schema = pa.schema([
-                ("ts", pa.timestamp("us", tz="UTC")),
-                ("name", pa.utf8()),
-            ])
+            us_schema = pa.schema(
+                [
+                    ("ts", pa.timestamp("us", tz="UTC")),
+                    ("name", pa.utf8()),
+                ]
+            )
             ds = pad.dataset(path, schema=us_schema)
 
             # Confirm it would fail without the fix
