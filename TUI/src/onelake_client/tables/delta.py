@@ -363,7 +363,9 @@ class DeltaTableReader:
             ds = dt.to_pyarrow_dataset()
             try:
                 table = ds.head(limit)
-            except pa.lib.ArrowInvalid:
+            except pa.lib.ArrowInvalid as exc:
+                if "timestamp" not in str(exc).lower():
+                    raise
                 # Delta schema says timestamp[us] but parquet has timestamp[ns].
                 # Re-read fragments with their physical (parquet) schema to
                 # bypass the safe cast, then let coerce_timestamps handle it.

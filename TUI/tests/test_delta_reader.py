@@ -606,8 +606,8 @@ class TestCoerceTimestamps:
         sentinel = MagicMock(name="not-a-table")
         assert coerce_timestamps(sentinel) is sentinel
 
-    def test_out_of_range_values_nullified(self):
-        """Timestamps outside year 0001–9999 become null after coercion."""
+    def test_in_range_ns_values_survive_coercion(self):
+        """All int64 ns timestamps map to years 1677–2262 (within 0001–9999), so survive."""
         import pyarrow as pa
 
         # int64 max as timestamp[ns] represents year ~2262 — within range.
@@ -657,7 +657,7 @@ class TestNullifyOutOfRange:
         """int64 min as timestamp[us] (year ~-294215) is nullified."""
         import pyarrow as pa
 
-        arr = pa.array([-(2**63 - 1)], type=pa.int64()).cast(pa.timestamp("us"))
+        arr = pa.array([-(2**63)], type=pa.int64()).cast(pa.timestamp("us"))
         result = _nullify_out_of_range(arr, pa.timestamp("us"))
         assert result[0].as_py() is None
 
@@ -834,21 +834,21 @@ class TestReadSample:
 
     @pytest.mark.asyncio()
     async def test_read_sample_arrow_invalid_non_timestamp_propagates(self, auth):
-        """ArrowInvalid errors NOT from timestamp casting should still propagate."""
+        """ArrowInvalid errors NOT from timestamp casting should propagate."""
         import pyarrow as pa
 
         mock_dataset = MagicMock()
         mock_dataset.head.side_effect = pa.lib.ArrowInvalid("Integer overflow")
-        mock_dataset.get_fragments.return_value = iter([])
 
         dt_mock = MagicMock()
         dt_mock.to_pyarrow_dataset.return_value = mock_dataset
 
         reader = DeltaTableReader(auth)
-        with self._patch_reader(reader, dt_mock):
-            # Should return empty table, not propagate (we catch all ArrowInvalid)
-            result = await reader.read_sample("ws", "LH.Lakehouse", "t", limit=100)
-        assert result.num_rows == 0
+        with (
+            self._patch_reader(reader, dt_mock),
+            pytest.raises(pa.lib.ArrowInvalid, match="Integer overflow"),
+        ):
+            await reader.read_sample("ws", "LH.Lakehouse", "t", limit=100)
 
     @pytest.mark.asyncio()
     async def test_read_sample_multi_fragment_respects_limit(self, auth):
@@ -856,7 +856,9 @@ class TestReadSample:
         import pyarrow as pa
 
         mock_dataset = MagicMock()
-        mock_dataset.head.side_effect = pa.lib.ArrowInvalid("would lose data")
+        mock_dataset.head.side_effect = pa.lib.ArrowInvalid(
+            "Casting from timestamp[ns] to timestamp[us] would lose data"
+        )
 
         # Two fragments, 3 rows each
         def make_fragment(values):
