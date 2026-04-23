@@ -573,14 +573,14 @@ class TestCoerceTimestamps:
 
         assert result.schema.field("ts").type == pa.timestamp("us", tz="UTC")
 
-    def test_corrupt_value_does_not_crash(self):
-        """In-range ns values that lose precision with safe=True are handled safely."""
+    def test_in_range_ns_precision_truncation_does_not_crash(self):
+        """In-range ns values that fail safe=True are truncated safely (not nullified)."""
         import pyarrow as pa
 
         # In-range int64/timestamp[ns] value that is not divisible by 1000, so
         # safe=True would fail due to precision loss rather than overflow.
-        corrupt_val = -(2**62)
-        arr = pa.array([corrupt_val], type=pa.timestamp("ns"))
+        in_range_precision_loss_val = -(2**62)
+        arr = pa.array([in_range_precision_loss_val], type=pa.timestamp("ns"))
         table = pa.table({"ts": arr})
         expected_ts = arr.cast(pa.timestamp("us"), safe=False)[0].as_py()
         # coerce_timestamps uses safe=False, so this should succeed and produce
