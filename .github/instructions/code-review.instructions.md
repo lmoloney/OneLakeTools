@@ -29,3 +29,4 @@ When performing a code review, apply these checks in addition to standard correc
 - `deltalake` >= 1.5 returns `arro3.core.Table` from `get_add_actions(flatten=True)` — use `.column(name).to_pylist()`, not `.to_pydict()`.
 - `dt.schema()` returns a `Schema` object — iterate via `.fields`, not directly.
 - `dt.file_uris()` replaces the old `dt.files()`.
+- Use `pa.lib.ArrowInvalid` (not `pa.ArrowInvalid`) for exception handling — both refer to the same object, but `pa.lib` is where pyarrow defines its exceptions and is consistent with what pyarrow raises at runtime.
