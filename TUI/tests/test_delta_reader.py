@@ -900,6 +900,39 @@ class TestReadSample:
         assert result.num_rows == 4
         assert result.schema.field("ts").type == pa.timestamp("us")
 
+    @pytest.mark.asyncio()
+    async def test_read_sample_fallback_stops_after_ten_fragments(self, auth):
+        """Fallback path reads at most 10 fragments even if limit is not met."""
+        import pyarrow as pa
+
+        mock_dataset = MagicMock()
+        mock_dataset.head.side_effect = pa.lib.ArrowInvalid(
+            "Casting from timestamp[ns] to timestamp[us] would lose data"
+        )
+
+        fragments = []
+        for i in range(12):
+            batch = pa.record_batch({"ts": pa.array([i], type=pa.timestamp("ns"))})
+            frag = MagicMock()
+            frag.physical_schema = batch.schema
+            frag.to_batches.return_value = iter([batch])
+            fragments.append(frag)
+
+        mock_dataset.get_fragments.return_value = iter(fragments)
+
+        dt_mock = MagicMock()
+        dt_mock.to_pyarrow_dataset.return_value = mock_dataset
+
+        reader = DeltaTableReader(auth)
+        with self._patch_reader(reader, dt_mock):
+            result = await reader.read_sample("ws", "LH.Lakehouse", "t", limit=100)
+
+        # Only first 10 fragments should be read
+        assert result.num_rows == 10
+        assert fragments[9].to_batches.called
+        assert not fragments[10].to_batches.called
+        assert not fragments[11].to_batches.called
+
 
 # ── End-to-end timestamp coercion (real parquet) ───────────────────────
 
