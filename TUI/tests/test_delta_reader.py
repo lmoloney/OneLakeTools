@@ -610,7 +610,7 @@ class TestCoerceTimestamps:
         """All int64 ns timestamps map to years 1677–2262 (within 0001–9999), so survive."""
         import pyarrow as pa
 
-        # int64 max as timestamp[ns] represents year ~2262 — within range.
+        # 2**62 is a large timestamp[ns] value (~year 1823) — within range.
         # After ns→us cast (÷1000), it stays in range, so it should survive.
         arr_in_range = pa.array([2**62], type=pa.timestamp("ns"))
         table_ok = pa.table({"ts": arr_in_range})

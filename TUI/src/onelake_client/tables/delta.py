@@ -382,7 +382,11 @@ class DeltaTableReader:
                         sliced = batch.slice(0, remaining)
                         batches.append(sliced)
                         remaining -= sliced.num_rows
-                table = pa.Table.from_batches(batches) if batches else pa.table({})
+                table = (
+                    pa.Table.from_batches(batches)
+                    if batches
+                    else pa.table({f.name: pa.array([], type=f.type) for f in ds.schema})
+                )
             return coerce_timestamps(table)
 
         return await asyncio.to_thread(_head)
