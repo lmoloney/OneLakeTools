@@ -1,4 +1,5 @@
 from pydantic import BaseModel
+from typing import Any
 
 
 class Column(BaseModel):
@@ -7,7 +8,7 @@ class Column(BaseModel):
     name: str
     type: str
     nullable: bool = True
-    metadata: dict[str, str] | None = None
+    metadata: dict[str, Any] | None = None
     comment: str | None = None
 
 
