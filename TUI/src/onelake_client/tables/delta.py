@@ -9,6 +9,8 @@ from deltalake.exceptions import DeltaError
 from onelake_client.models.table import Column, DeltaTableInfo
 
 if TYPE_CHECKING:
+    import pyarrow as pa
+
     from onelake_client.auth import OneLakeAuth
 
 logger = logging.getLogger("onelake_client.tables.delta")
@@ -48,7 +50,7 @@ def _schema_to_columns(schema) -> list[Column]:
     return columns
 
 
-def coerce_timestamps(table):
+def coerce_timestamps(table: pa.Table) -> pa.Table:
     """Downcast timestamp[ns] columns to timestamp[us] to avoid Arrow cast errors.
 
     Parquet files written with nanosecond-precision timestamps can trigger

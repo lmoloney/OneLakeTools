@@ -574,10 +574,10 @@ class TestCoerceTimestamps:
         assert result.schema.field("ts").type == pa.timestamp("us", tz="UTC")
 
     def test_corrupt_value_does_not_crash(self):
-        """Wildly out-of-range ns values don't raise — the exact bug from the screenshot."""
+        """In-range ns values that lose precision with safe=True are handled safely."""
         import pyarrow as pa
 
-        # Value that fits in int64 but is not divisible by 1000, so ns→us with
+        # In-range int64/timestamp[ns] value that is not divisible by 1000, so
         # safe=True would fail due to precision loss rather than overflow.
         corrupt_val = -(2**62)
         arr = pa.array([corrupt_val], type=pa.timestamp("ns"))
@@ -676,6 +676,30 @@ class TestReadSample:
 
         assert result == mock_table
         assert result.num_rows == 0
+
+    @pytest.mark.asyncio()
+    async def test_read_sample_downcasts_timestamp_ns(self, auth):
+        """read_sample downcasts timestamp[ns] columns via coerce_timestamps."""
+        import pyarrow as pa
+
+        arr = pa.array([1_000_000_001], type=pa.timestamp("ns"))
+        table = pa.table({"ts": arr, "v": [1]})
+
+        mock_dataset = MagicMock()
+        mock_dataset.head.return_value = table
+
+        dt_mock = MagicMock()
+        dt_mock.to_pyarrow_dataset.return_value = mock_dataset
+
+        reader = DeltaTableReader(auth)
+        with self._patch_reader(reader, dt_mock):
+            result = await reader.read_sample("ws", "LH.Lakehouse", "t", limit=1)
+
+        assert result.schema.field("ts").type == pa.timestamp("us")
+        assert result.column("ts").to_pylist() == [
+            arr.cast(pa.timestamp("us"), safe=False)[0].as_py()
+        ]
+        mock_dataset.head.assert_called_once_with(1)
 
 
 # ── DeltaTableReader.read_cdf ───────────────────────────────────────────
