@@ -678,8 +678,8 @@ class TestReadSample:
         assert result.num_rows == 0
 
     @pytest.mark.asyncio()
-    async def test_read_sample_downcasts_timestamp_ns(self, auth):
-        """read_sample downcasts timestamp[ns] columns via coerce_timestamps."""
+    async def test_read_sample_coerces_timestamp_ns(self, auth):
+        """read_sample coerces timestamp[ns] columns via coerce_timestamps."""
         import pyarrow as pa
 
         arr = pa.array([1_000_000_001], type=pa.timestamp("ns"))
