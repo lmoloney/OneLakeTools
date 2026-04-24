@@ -60,6 +60,21 @@ def test_path_info_string_coercion():
     assert pi.content_length == 100
 
 
+def test_column_metadata_non_string_values():
+    """Non-string metadata values (int, bool, nested dict) round-trip correctly (#25)."""
+    meta = {
+        "delta.columnMapping.id": 42,
+        "delta.columnMapping.physicalName": "col-abc-123",
+        "delta.generationExpression.enabled": True,
+        "custom.nested": {"key": "value"},
+    }
+    col = Column(name="sensor_id", type="long", metadata=meta)
+    assert col.metadata["delta.columnMapping.id"] == 42
+    assert col.metadata["delta.generationExpression.enabled"] is True
+    assert col.metadata["custom.nested"] == {"key": "value"}
+    assert col.metadata["delta.columnMapping.physicalName"] == "col-abc-123"
+
+
 def test_delta_table_info():
     info = DeltaTableInfo(
         name="customers",
