@@ -74,6 +74,18 @@ def test_column_metadata_non_string_values():
     assert col.metadata["custom.nested"] == {"key": "value"}
     assert col.metadata["delta.columnMapping.physicalName"] == "col-abc-123"
 
+    # Round-trip via dict serialization
+    col2 = Column.model_validate(col.model_dump())
+    assert col2.metadata["delta.columnMapping.id"] == 42
+    assert col2.metadata["delta.generationExpression.enabled"] is True
+    assert col2.metadata["custom.nested"] == {"key": "value"}
+
+    # Round-trip via JSON serialization
+    col3 = Column.model_validate_json(col.model_dump_json())
+    assert col3.metadata["delta.columnMapping.id"] == 42
+    assert col3.metadata["delta.generationExpression.enabled"] is True
+    assert col3.metadata["custom.nested"] == {"key": "value"}
+
 
 def test_delta_table_info():
     info = DeltaTableInfo(
