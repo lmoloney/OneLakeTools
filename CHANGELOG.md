@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `Column.metadata` type changed from `dict[str, str]` to `dict[str, Any]` — Delta column mapping stores non-string metadata values (e.g. `delta.columnMapping.id` is an int) (#25)
 - Data preview crash on Delta tables with nanosecond-precision timestamps — `timestamp[ns]` columns are now safely downcast to `timestamp[us]` with sub-microsecond precision truncated; timestamps outside year 0001–9999 are defensively nullified (#19)
 
 ## [0.3.0] - 2026-04-20
