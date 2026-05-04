@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Committed test fixtures: 5 Delta tables (`basic_table`, `partitioned_table`, `column_mapping_v2`, `cdf_enabled`, `unicode_paths`) and 3 Parquet files (`all_types`, `nested_structs`, `dictionary_encoded`)
 - `syrupy` snapshot tests for Delta metadata and Parquet schema regression detection
 - Registered pytest markers (`integration`, `iceberg`, `slow`) in `pyproject.toml`
+- Integration test CI workflow (`integration.yml`) — runs on push to `main`, nightly, and manual dispatch with OIDC-authenticated Fabric access
+- Expanded live integration tests from 6 to 11 — workspace filtering, item field validation, DFS subdirectory browsing, lakehouse properties, Delta column assertions
 - `coerce_timestamps` public helper in `onelake_client.tables` for safely downcasting `timestamp[ns]` columns to `timestamp[us]`
 - CI job that enforces `CHANGELOG.md` updates on user-facing PRs (skip with `chore` or `documentation` label)
 - Code-review instructions (`.github/instructions/code-review.instructions.md`) covering changelog, docs, Rich markup, and pyarrow conventions

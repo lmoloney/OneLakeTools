@@ -1,0 +1,48 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 3 * * *'  # Nightly at 3 AM UTC
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # Required for OIDC federated credentials
+  contents: read
+
+jobs:
+  integration:
+    name: Live Fabric Tests
+    runs-on: ubuntu-latest
+    environment: fabric-test
+    # Don't fail the workflow on integration test flakiness
+    continue-on-error: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: cd TUI && uv sync --extra dev
+
+      - name: Run integration tests
+        run: cd TUI && uv run pytest tests/integration/ -v --timeout=120
+        env:
+          ONELAKE_TEST_WORKSPACE_ID: ${{ secrets.ONELAKE_TEST_WORKSPACE_ID }}
+          ONELAKE_TEST_LAKEHOUSE_ID: ${{ secrets.ONELAKE_TEST_LAKEHOUSE_ID }}
+          ONELAKE_TEST_LAKEHOUSE_NAME: ${{ secrets.ONELAKE_TEST_LAKEHOUSE_NAME }}
+          ONELAKE_TEST_TABLE_NAME: ${{ secrets.ONELAKE_TEST_TABLE_NAME }}
