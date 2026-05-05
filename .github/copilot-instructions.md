@@ -7,8 +7,9 @@ Terminal UI and async Python client for browsing Microsoft Fabric workspaces and
 ```bash
 cd TUI
 uv sync                              # Install deps
-uv run pytest                        # Run tests
-uv run pytest tests/integration/     # Integration tests (needs az login)
+uv run pytest --ignore=tests/integration  # Unit tests only
+uv run pytest                             # All tests (needs az login)
+uv run pytest tests/integration/          # Integration tests only (needs az login)
 uv run ruff check src/ tests/        # Lint
 uv run ruff format src/ tests/       # Format
 uv run onelake-tui                   # Launch TUI (PROD)
@@ -121,9 +122,10 @@ TUI/src/
 ```bash
 cd TUI
 uv sync --extra dev
-uv run pytest                          # Unit tests only (fast, ~60s)
-uv run pytest tests/integration/ -v    # Integration tests (needs az login, ~5min)
-uv run pytest --snapshot-update        # Update snapshots after fixture changes
+uv run pytest --ignore=tests/integration  # Unit tests only (fast, ~80s)
+uv run pytest tests/integration/ -v       # Integration tests (needs az login, ~5min)
+uv run pytest                             # Everything (needs az login)
+uv run pytest --snapshot-update           # Update snapshots after fixture changes
 ```
 
 ## How to Add Things

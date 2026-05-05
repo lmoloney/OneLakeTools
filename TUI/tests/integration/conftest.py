@@ -127,6 +127,9 @@ def workspace_id():
 @pytest.fixture
 def workspace_name():
     """Workspace display name (for friendly-name path tests)."""
+    env_name = os.environ.get("ONELAKE_TEST_WORKSPACE_NAME")
+    if env_name:
+        return env_name
     if not _MANIFEST:
         pytest.skip("No manifest — workspace_name requires manifest")
     return _MANIFEST["workspace"]["name"]

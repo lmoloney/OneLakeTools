@@ -30,10 +30,13 @@ cd TUI
 uv sync --extra dev
 
 # Unit tests only (fast, no credentials needed)
-uv run pytest
+uv run pytest --ignore=tests/integration
 
 # Integration tests (requires az login + populated Fabric workspace)
 uv run pytest tests/integration/ -v
+
+# Everything (requires az login)
+uv run pytest
 
 # Update snapshots after changing fixture data or rendering logic
 uv run pytest --snapshot-update
@@ -229,3 +232,61 @@ The following syntax-highlighted formats use the same `TextArea` rendering path 
 - `.r`, `.scala`, `.java`, `.cs`, `.cpp`, `.c`, `.rs`, `.go`, `.rb`
 
 The `.avro` handler is a distinct code path (`_preview_avro`) and should be tested when Avro fixtures are available. The syntax-highlighted text formats all flow through the same `TextArea(language=lexer)` constructor — testing `.py`, `.sql`, and `.yaml` provides sufficient coverage of this path.
+
+## Complete Test Inventory
+
+**762 tests** across 33 files (755 passed, 7 xpassed on last full run).
+
+### Summary by Category
+
+| Category | Tests | Files | Description |
+|----------|-------|-------|-------------|
+| Client Library | 312 | 12 | Auth, HTTP, DFS, Fabric API, Delta reader, Iceberg, models, paths, error handling, edge cases |
+| TUI Graphical | 113 | 7 | Widget smoke tests, navigation flow, file previews, table views, widget loading |
+| Fixture / Snapshot | 108 | 3 | Delta log parsing, Parquet introspection, syrupy regression snapshots |
+| Integration | 137 | 8 | Live Fabric workspace: DFS browsing, Delta tables, files, schema lakehouse, warehouse, mirrors, protocol |
+| Other | 52 | 3 | App interactions, copy menu, sprite |
+| **Total** | **762** | **33** | |
+
+### Unit Tests
+
+| File | Tests | Category | Purpose |
+|------|-------|----------|---------|
+| [test_auth.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/test_auth.py) | 24 | Client Library | OneLakeAuth, token caching, JWT parsing, credential types |
+| [test_http.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/test_http.py) | 46 | Client Library | Retry logic, exception mapping, pagination, client factory |
+| [test_dfs_client.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/test_dfs_client.py) | 11 | Client Library | DfsClient methods: list_paths, read_file, get_properties, exists |
+| [test_fabric_client.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/test_fabric_client.py) | 9 | Client Library | FabricClient: list_workspaces, list_items, get_lakehouse |
+| [test_delta_reader.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/test_delta_reader.py) | 80 | Client Library | DeltaTableReader, protocol extraction, subprocess isolation, timestamp coercion, warnings |
+| [test_iceberg_reader.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/test_iceberg_reader.py) | 20 | Client Library | IcebergTableReader, schema extraction, Iceberg metadata |
+| [test_models.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/test_models.py) | 8 | Client Library | Pydantic models: camelCase parsing, Column.metadata typing, DeltaTableInfo |
+| [test_path_roundtrips.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/test_path_roundtrips.py) | 37 | Client Library | URI building, path encoding (HTTPS/ABFSS named+GUID), special characters |
+| [test_error_handling.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/test_error_handling.py) | 22 | Client Library | Error propagation: DFS, Fabric, pagination, Delta subprocess |
+| [test_edge_cases.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/test_edge_cases.py) | 22 | Client Library | Unicode handling, empty responses, null values, malformed JSON |
+| [test_robustness.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/test_robustness.py) | 22 | Client Library | Very long names, special chars, malformed inputs |
+| [test_tree_edge_cases.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/test_tree_edge_cases.py) | 11 | Client Library | OneLakeTree: table detection, schema folders, sort order, error handling |
+| [test_delta_fixtures.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/test_delta_fixtures.py) | 72 | Fixture | Real Delta log parsing: basic, partitioned, column mapping (v2+id), CDF, unicode, schema evolution, V2 checkpoint, inline DV, reader features |
+| [test_parquet_fixtures.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/test_parquet_fixtures.py) | 28 | Fixture | Parquet schema introspection, complex types, coerce_timestamps idempotency |
+| [test_detail_snapshots.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/test_detail_snapshots.py) | 8 | Snapshot | Syrupy regression detection for Delta metadata + Parquet schema output |
+| [test_tui_smoke.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/test_tui_smoke.py) | 14 | TUI Graphical | Widget mount-without-crashing, rapid navigation stability |
+| [test_tui_navigation_flow.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/test_tui_navigation_flow.py) | 22 | TUI Graphical | End-to-end workspace→item→tree→detail, keyboard nav, copy menu, refresh |
+| [test_tui_file_previews.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/test_tui_file_previews.py) | 12 | TUI Graphical | Per-format preview rendering: MD, CSV, JSON, NDJSON, Parquet, Python, SQL, YAML, hex, errors |
+| [test_tui_table_views.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/test_tui_table_views.py) | 29 | TUI Graphical | Table metadata tabs: schema, data, history, CDF. Regression tests for arro3 + reader version |
+| [test_detail_preview.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/test_detail_preview.py) | 23 | TUI Graphical | File preview error states, CSV/JSON/Markdown edge cases, binary hex dump |
+| [test_widget_loading.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/test_widget_loading.py) | 13 | TUI Graphical | StatusBar, workspace/item loading, environment display |
+| [test_app_interactions.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/test_app_interactions.py) | 25 | Other | OneLakeApp event chains, action methods, panel switching |
+| [test_detail_features.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/test_detail_features.py) | 23 | Other | Avro preview, Delta features, DV/reader-version error detection |
+| [test_copy_menu.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/test_copy_menu.py) | 3 | Other | CopyFormatMenu modal, format selection |
+| [test_sprite.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/test_sprite.py) | 1 | Other | OneLake block-art logo widget |
+
+### Integration Tests
+
+| File | Tests | Purpose |
+|------|-------|---------|
+| [test_live.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/integration/test_live.py) | 17 | Workspace/item listing, DFS GUID + friendly-name modes, Delta metadata |
+| [test_dfs_browsing.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/integration/test_dfs_browsing.py) | 16 | Root dirs, table discovery, file existence, unicode/special paths, addressing modes |
+| [test_delta_tables.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/integration/test_delta_tables.py) | 42 | Per-table metadata for all 15 tables + read_sample, list_files, read_cdf, DV details |
+| [test_delta_protocol.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/integration/test_delta_protocol.py) | 21 | Protocol versions, reader/writer features, total_rows, warnings, schema evolution, column mapping, clustering |
+| [test_file_operations.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/integration/test_file_operations.py) | 10 | Read CSV/JSON/Markdown/Parquet via DFS, content validation, properties, error cases |
+| [test_schema_lakehouse.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/integration/test_schema_lakehouse.py) | 8 | Two-level schema folder detection (dbo + analytics), delta log presence |
+| [test_warehouse.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/integration/test_warehouse.py) | 10 | Warehouse DFS structure (Audit/), Iceberg metadata reader |
+| [test_mirrored_db.py](https://github.com/lmoloney/OneLakeTools/blob/main/TUI/tests/integration/test_mirrored_db.py) | 13 | Both mirrors: DFS structure, schema folders, Delta metadata, CDF property |
