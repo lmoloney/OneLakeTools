@@ -88,6 +88,7 @@ class ItemList(Vertical):
         super().__init__(**kwargs)
         self.client = client
         self._items: list[Item] = []
+        self._item_index: dict[str, Item] = {}
         self._workspace_id: str = ""
         self._workspace_name: str = ""
         self._item_cache: dict[str, tuple[list[Item], float]] = {}  # ws_id → (items, fetched_at)
@@ -113,6 +114,7 @@ class ItemList(Vertical):
             items, fetched_at = cached
             if (time.monotonic() - fetched_at) < _CACHE_TTL:
                 self._items = items
+                self._item_index = {i.id: i for i in items}
                 self._render_items()
                 logger.debug("Using cached items for %s (%d items)", workspace_name, len(items))
                 return
@@ -120,6 +122,7 @@ class ItemList(Vertical):
         try:
             items = await self.client.fabric.list_items(workspace_id)
             self._items = sorted(items, key=lambda i: (i.type, i.display_name.casefold()))
+            self._item_index = {i.id: i for i in self._items}
             self._item_cache[workspace_id] = (self._items, time.monotonic())
             self._render_items()
         except Exception as e:
@@ -148,10 +151,7 @@ class ItemList(Vertical):
             self.post_message(self.ItemSelected(self._workspace_id, self._workspace_name, item))
 
     def _item_by_id(self, item_id: str) -> Item | None:
-        for item in self._items:
-            if item.id == item_id:
-                return item
-        return None
+        return self._item_index.get(item_id)
 
     def clear_items(self) -> None:
         """Clear the items list and cache."""
