@@ -1,0 +1,223 @@
+{
+  "version": "1.0",
+  "provisioned_at": "2026-05-05T07:01:28.782177+00:00",
+  "workspace": {
+    "id": "f2cd7ad6-dc25-4302-aad7-60c53c7200c3",
+    "name": "OneLakeTools-Test"
+  },
+  "items": {
+    "lakehouse_simple": {
+      "id": "d6038e66-1073-4661-a191-f1c83459cbda",
+      "name": "olt_lakehouse_simple",
+      "type": "Lakehouse",
+      "ready": true,
+      "expected_root_dirs": [
+        "Files",
+        "Functions",
+        "TableMaintenance",
+        "Tables"
+      ],
+      "expected_tables": [
+        "customers",
+        "orders",
+        "donn\u00e9es_client",
+        "all_data_types",
+        "partitioned_sales",
+        "cdf_tracking",
+        "optimized_events",
+        "high_version",
+        "timestamp_edge_cases",
+        "deletion_vector_demo",
+        "schema_evolution_add",
+        "column_mapping_id",
+        "liquid_clustered",
+        "generated_and_checks",
+        "schema_evolution_type"
+      ],
+      "expected_files": [
+        "Files/sample.csv",
+        "Files/data.json",
+        "Files/readme.md",
+        "Files/nested_types.parquet",
+        "Files/reports/Q1 2024 Summary.md",
+        "Files/donn\u00e9es/r\u00e9sum\u00e9.csv",
+        "Files/special (copy)/data & more.json"
+      ],
+      "expected_schemas": {},
+      "delta_features": {
+        "customers": {
+          "reader_version": 1,
+          "writer_version": 2,
+          "partition_columns": [],
+          "expected_columns": ["id", "name", "email", "city", "created_at"]
+        },
+        "orders": {
+          "reader_version": 1,
+          "writer_version": 2,
+          "partition_columns": [],
+          "min_version": 1
+        },
+        "données_client": {
+          "reader_version": 1,
+          "writer_version": 2,
+          "expected_columns": ["identifiant", "nom", "ville"]
+        },
+        "all_data_types": {
+          "reader_version": 1,
+          "writer_version": 2,
+          "min_columns": 14
+        },
+        "partitioned_sales": {
+          "reader_version": 1,
+          "writer_version": 2,
+          "partition_columns": ["sale_year", "sale_month"],
+          "expected_columns": ["sale_id", "product", "amount", "region", "sale_year", "sale_month"]
+        },
+        "cdf_tracking": {
+          "reader_version": 1,
+          "writer_version": 4,
+          "cdf_enabled": true,
+          "min_version": 3
+        },
+        "optimized_events": {
+          "reader_version": 1,
+          "writer_version": 2,
+          "min_version": 10
+        },
+        "high_version": {
+          "reader_version": 1,
+          "writer_version": 2,
+          "min_version": 15
+        },
+        "timestamp_edge_cases": {
+          "reader_version": 1,
+          "writer_version": 2,
+          "has_timestamp_ntz": true
+        },
+        "deletion_vector_demo": {
+          "reader_version": 3,
+          "writer_version": 7,
+          "reader_features": ["deletionVectors"],
+          "writer_features": ["deletionVectors"],
+          "has_deletion_vectors": true
+        },
+        "schema_evolution_add": {
+          "reader_version": 1,
+          "writer_version": 2,
+          "expected_columns_latest": ["id", "name", "value", "category"],
+          "min_version": 1
+        },
+        "schema_evolution_type": {
+          "reader_version": 1,
+          "writer_version": 2,
+          "notes": "Type widening not supported on Fabric Spark - amount remains INT"
+        },
+        "column_mapping_id": {
+          "reader_version": 2,
+          "writer_version": 5,
+          "reader_features": [],
+          "column_mapping_mode": "id",
+          "expected_columns": ["user_id", "email", "rating"]
+        },
+        "liquid_clustered": {
+          "reader_version": 1,
+          "writer_version": 7,
+          "writer_features": ["clustering"],
+          "clustering_columns": ["category", "region"]
+        },
+        "generated_and_checks": {
+          "reader_version": 1,
+          "writer_version": 2,
+          "has_check_constraint": true,
+          "notes": "Generated columns not supported on Fabric Spark - full_name is regular STRING"
+        }
+      },
+      "notes": "Simple lakehouse without schema folders. Tables directly under Tables/. Includes: all data types, partitioned table, CDF-enabled, OPTIMIZE+ZORDER, high-version with checkpoint, timestamp edge cases, in-commit timestamps, deletion vectors, schema evolution, column mapping, liquid clustering, generated columns and check constraints. Files include unicode paths, spaces, parentheses, ampersands."
+    },
+    "lakehouse_schema": {
+      "id": "33ea9d8a-572e-4c37-9fc9-ce91c79c3395",
+      "name": "olt_lakehouse_schema",
+      "type": "Lakehouse",
+      "ready": true,
+      "expected_root_dirs": [
+        "Files",
+        "Functions",
+        "TableMaintenance",
+        "Tables"
+      ],
+      "expected_tables": [],
+      "expected_files": [],
+      "expected_schemas": {
+        "dbo": [
+          "products",
+          "inventory"
+        ],
+        "analytics": [
+          "daily_summary",
+          "user_activity"
+        ]
+      },
+      "notes": "Schema-enabled lakehouse with dbo and analytics schemas."
+    },
+    "warehouse": {
+      "id": "99809aa2-f4db-492d-a237-9d8a0babe815",
+      "name": "olt-warehouse",
+      "type": "Warehouse",
+      "ready": true,
+      "expected_root_dirs": [
+        "Audit",
+        "Files",
+        "Tables"
+      ],
+      "expected_tables": [],
+      "expected_files": [],
+      "expected_schemas": {
+        "dbo": [
+          "dim_product",
+          "fact_sales"
+        ]
+      },
+      "notes": "Warehouse with dbo schema. Tables have GUID data folders + _delta_log + metadata."
+    },
+    "mirror_standard": {
+      "id": "38767aa3-a577-4275-a2be-cbd9816f78cc",
+      "name": "olt_mirror_standard",
+      "type": "MirroredDatabase",
+      "ready": true,
+      "expected_root_dirs": [
+        "Files",
+        "Tables"
+      ],
+      "expected_tables": [],
+      "expected_files": [],
+      "expected_schemas": {
+        "dbo": [
+          "Customers",
+          "Orders",
+          "Products"
+        ]
+      },
+      "notes": "Open Mirroring (GenericMirror), no CDF. 30-day retention. Retail scenario data via OMF."
+    },
+    "mirror_cdf": {
+      "id": "e327e95f-ab76-4684-93a7-9745f7ebc313",
+      "name": "olt_mirror_cdf",
+      "type": "MirroredDatabase",
+      "ready": true,
+      "expected_root_dirs": [
+        "Files",
+        "Tables"
+      ],
+      "expected_tables": [],
+      "expected_files": [],
+      "expected_schemas": {
+        "hr": [
+          "Employees",
+          "Departments",
+          "TimeOff"
+        ]
+      },
+      "notes": "Open Mirroring (GenericMirror) WITH CDF enabled. 30-day retention. HR scenario data via OMF."
+    }
+  }
+}

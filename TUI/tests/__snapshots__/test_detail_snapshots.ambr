@@ -1,0 +1,259 @@
+# serializer version: 1
+# name: TestCoerceTimestampsSnapshot.test_coerced_schema
+  dict({
+    'fields': list([
+      dict({
+        'name': 'int_col',
+        'type': 'int64',
+      }),
+      dict({
+        'name': 'float_col',
+        'type': 'double',
+      }),
+      dict({
+        'name': 'string_col',
+        'type': 'string',
+      }),
+      dict({
+        'name': 'bool_col',
+        'type': 'bool',
+      }),
+      dict({
+        'name': 'date_col',
+        'type': 'date32[day]',
+      }),
+      dict({
+        'name': 'timestamp_us_col',
+        'type': 'timestamp[us, tz=UTC]',
+      }),
+      dict({
+        'name': 'timestamp_ns_col',
+        'type': 'timestamp[us]',
+      }),
+      dict({
+        'name': 'decimal_col',
+        'type': 'decimal128(10, 2)',
+      }),
+    ]),
+  })
+# ---
+# name: TestDeltaSnapshots.test_basic_table_metadata
+  dict({
+    'columns': list([
+      dict({
+        'has_metadata': False,
+        'name': 'id',
+        'nullable': True,
+        'type': 'PrimitiveType("long")',
+      }),
+      dict({
+        'has_metadata': False,
+        'name': 'name',
+        'nullable': True,
+        'type': 'PrimitiveType("string")',
+      }),
+      dict({
+        'has_metadata': False,
+        'name': 'score',
+        'nullable': True,
+        'type': 'PrimitiveType("double")',
+      }),
+      dict({
+        'has_metadata': False,
+        'name': 'active',
+        'nullable': True,
+        'type': 'PrimitiveType("boolean")',
+      }),
+    ]),
+    'name': 'customers',
+    'num_files': 1,
+    'partition_columns': list([
+    ]),
+    'properties': dict({
+    }),
+    'version': 0,
+  })
+# ---
+# name: TestDeltaSnapshots.test_cdf_enabled_metadata
+  dict({
+    'columns': list([
+      dict({
+        'has_metadata': False,
+        'name': 'order_id',
+        'nullable': True,
+        'type': 'PrimitiveType("long")',
+      }),
+      dict({
+        'has_metadata': False,
+        'name': 'amount',
+        'nullable': True,
+        'type': 'PrimitiveType("double")',
+      }),
+    ]),
+    'name': 'orders',
+    'num_files': 1,
+    'partition_columns': list([
+    ]),
+    'properties': dict({
+      'delta.enableChangeDataFeed': 'true',
+    }),
+    'version': 0,
+  })
+# ---
+# name: TestDeltaSnapshots.test_partitioned_table_metadata
+  dict({
+    'columns': list([
+      dict({
+        'has_metadata': False,
+        'name': 'region',
+        'nullable': True,
+        'type': 'PrimitiveType("string")',
+      }),
+      dict({
+        'has_metadata': False,
+        'name': 'year',
+        'nullable': True,
+        'type': 'PrimitiveType("integer")',
+      }),
+      dict({
+        'has_metadata': False,
+        'name': 'revenue',
+        'nullable': True,
+        'type': 'PrimitiveType("double")',
+      }),
+    ]),
+    'name': 'sales',
+    'num_files': 4,
+    'partition_columns': list([
+      'region',
+      'year',
+    ]),
+    'properties': dict({
+    }),
+    'version': 0,
+  })
+# ---
+# name: TestDeltaSnapshots.test_unicode_paths_metadata
+  dict({
+    'columns': list([
+      dict({
+        'has_metadata': False,
+        'name': 'données_id',
+        'nullable': True,
+        'type': 'PrimitiveType("long")',
+      }),
+      dict({
+        'has_metadata': False,
+        'name': '名前',
+        'nullable': True,
+        'type': 'PrimitiveType("string")',
+      }),
+    ]),
+    'name': 'données_client',
+    'num_files': 1,
+    'partition_columns': list([
+    ]),
+    'properties': dict({
+    }),
+    'version': 0,
+  })
+# ---
+# name: TestParquetSnapshots.test_all_types_schema
+  dict({
+    'fields': list([
+      dict({
+        'name': 'int_col',
+        'nullable': True,
+        'type': 'int64',
+      }),
+      dict({
+        'name': 'float_col',
+        'nullable': True,
+        'type': 'double',
+      }),
+      dict({
+        'name': 'string_col',
+        'nullable': True,
+        'type': 'string',
+      }),
+      dict({
+        'name': 'bool_col',
+        'nullable': True,
+        'type': 'bool',
+      }),
+      dict({
+        'name': 'date_col',
+        'nullable': True,
+        'type': 'date32[day]',
+      }),
+      dict({
+        'name': 'timestamp_us_col',
+        'nullable': True,
+        'type': 'timestamp[us, tz=UTC]',
+      }),
+      dict({
+        'name': 'timestamp_ns_col',
+        'nullable': True,
+        'type': 'timestamp[ns]',
+      }),
+      dict({
+        'name': 'decimal_col',
+        'nullable': True,
+        'type': 'decimal128(10, 2)',
+      }),
+    ]),
+    'num_columns': 8,
+    'num_rows': 3,
+  })
+# ---
+# name: TestParquetSnapshots.test_dictionary_encoded_schema
+  dict({
+    'fields': list([
+      dict({
+        'name': 'id',
+        'nullable': True,
+        'type': 'int64',
+      }),
+      dict({
+        'name': 'category',
+        'nullable': True,
+        'type': 'dictionary<values=string, indices=int32, ordered=0>',
+      }),
+      dict({
+        'name': 'value',
+        'nullable': True,
+        'type': 'double',
+      }),
+    ]),
+    'num_columns': 3,
+    'num_rows': 8,
+  })
+# ---
+# name: TestParquetSnapshots.test_nested_structs_schema
+  dict({
+    'fields': list([
+      dict({
+        'name': 'id',
+        'nullable': True,
+        'type': 'int64',
+      }),
+      dict({
+        'name': 'address',
+        'nullable': True,
+        'type': 'struct<street: string, city: string>',
+      }),
+      dict({
+        'name': 'tags',
+        'nullable': True,
+        'type': 'list<element: string>',
+      }),
+      dict({
+        'name': 'metadata',
+        'nullable': True,
+        'type': "map<string, string ('metadata')>",
+      }),
+    ]),
+    'num_columns': 4,
+    'num_rows': 2,
+  })
+# ---

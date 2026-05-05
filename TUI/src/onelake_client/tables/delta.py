@@ -154,7 +154,24 @@ try:
     files = dt.file_uris()
     meta = dt.metadata()
 
+    # Protocol extraction
+    reader_version = 1
+    writer_version = 2
+    reader_features = []
+    writer_features = []
+    try:
+        protocol = dt.protocol()
+        reader_version = protocol.min_reader_version
+        writer_version = protocol.min_writer_version
+        rf = getattr(protocol, 'reader_features', None)
+        reader_features = list(rf) if rf else []
+        wf = getattr(protocol, 'writer_features', None)
+        writer_features = list(wf) if wf else []
+    except Exception:
+        pass
+
     size_bytes = 0
+    total_rows = None
     try:
         add_actions = dt.get_add_actions(flatten=True)
         if hasattr(add_actions, "to_pydict"):
@@ -168,6 +185,22 @@ try:
     except Exception:
         pass
 
+    try:
+        col_names = []
+        if hasattr(add_actions, "column_names"):
+            col_names = add_actions.column_names
+        has_col = hasattr(add_actions, "column")
+        if has_col and "num_records" in col_names:
+            nr = add_actions.column("num_records").to_pylist()
+            total_rows = sum(v for v in nr if v is not None)
+        elif hasattr(add_actions, "to_pydict"):
+            sd2 = add_actions.to_pydict()
+            nr = sd2.get("num_records", [])
+            if nr:
+                total_rows = sum(v for v in nr if v is not None)
+    except Exception:
+        pass
+
     json.dump({
         "ok": True,
         "name": meta.name or "",
@@ -178,6 +211,11 @@ try:
         "partition_columns": list(meta.partition_columns),
         "properties": dict(meta.configuration) if meta.configuration else {},
         "description": meta.description,
+        "reader_version": reader_version,
+        "writer_version": writer_version,
+        "reader_features": reader_features,
+        "writer_features": writer_features,
+        "total_rows": total_rows,
     }, sys.stdout)
 except Exception as e:
     json.dump({"ok": False, "error": f"{type(e).__name__}: {e}"}, sys.stdout)
@@ -235,6 +273,23 @@ def _run_delta_subprocess(
         raise DeltaError(f"Delta reader returned invalid output: {stdout[:200]}") from exc
 
 
+# Known features that delta-rs may not fully support
+_POTENTIALLY_UNSUPPORTED_FEATURES = {
+    "deletionVectors": "Deletion vectors — data preview may include soft-deleted rows",
+    "v2Checkpoint": "V2 checkpoints — log replay may be incomplete",
+    "typeWidening": "Type widening — column types may have changed between versions",
+}
+
+
+def _check_reader_warnings(info: DeltaTableInfo) -> None:
+    """Populate warnings for reader features that may not be fully supported."""
+    for feature in info.reader_features:
+        if feature in _POTENTIALLY_UNSUPPORTED_FEATURES:
+            info.warnings.append(
+                f"⚠️ Table uses '{feature}': {_POTENTIALLY_UNSUPPORTED_FEATURES[feature]}"
+            )
+
+
 class DeltaTableReader:
     """Reads Delta table metadata from OneLake.
 
@@ -283,8 +338,11 @@ class DeltaTableReader:
         logger.debug("Loading Delta table: %s", uri)
 
         if self._isolate:
-            return await self._get_metadata_subprocess(uri, table_name)
-        return await self._get_metadata_inprocess(uri, table_name)
+            info = await self._get_metadata_subprocess(uri, table_name)
+        else:
+            info = await self._get_metadata_inprocess(uri, table_name)
+        _check_reader_warnings(info)
+        return info
 
     async def _get_metadata_subprocess(self, uri: str, table_name: str) -> DeltaTableInfo:
         """Load metadata in an isolated subprocess (Rust-panic safe)."""
@@ -303,6 +361,11 @@ class DeltaTableReader:
             partition_columns=result["partition_columns"],
             properties=result["properties"],
             description=result["description"],
+            reader_version=result.get("reader_version", 1),
+            writer_version=result.get("writer_version", 2),
+            reader_features=result.get("reader_features", []),
+            writer_features=result.get("writer_features", []),
+            total_rows=result.get("total_rows"),
         )
 
     async def _get_metadata_inprocess(self, uri: str, table_name: str) -> DeltaTableInfo:
@@ -314,7 +377,30 @@ class DeltaTableReader:
         files = dt.file_uris()
         metadata = dt.metadata()
 
+        # Protocol extraction
+        reader_version = 1
+        writer_version = 2
+        reader_features: list[str] = []
+        writer_features: list[str] = []
+        try:
+            protocol = dt.protocol()
+            reader_version = protocol.min_reader_version
+            writer_version = protocol.min_writer_version
+            reader_features = (
+                list(protocol.reader_features)
+                if hasattr(protocol, "reader_features") and protocol.reader_features
+                else []
+            )
+            writer_features = (
+                list(protocol.writer_features)
+                if hasattr(protocol, "writer_features") and protocol.writer_features
+                else []
+            )
+        except Exception:
+            pass
+
         size_bytes = 0
+        add_actions = None
         try:
             add_actions = await asyncio.to_thread(dt.get_add_actions, flatten=True)
             if hasattr(add_actions, "to_pydict"):
@@ -328,6 +414,23 @@ class DeltaTableReader:
         except (DeltaError, KeyError, IndexError, ValueError) as e:
             logger.warning("Failed to compute Delta table size: %s", e)
 
+        # Row count from add action statistics
+        total_rows = None
+        if add_actions is not None:
+            try:
+                if hasattr(add_actions, "column") and "num_records" in (
+                    add_actions.column_names if hasattr(add_actions, "column_names") else []
+                ):
+                    total_rows = sum(
+                        v for v in add_actions.column("num_records").to_pylist() if v is not None
+                    )
+                elif hasattr(add_actions, "to_pydict"):
+                    sd = add_actions.to_pydict()
+                    nr = sd.get("num_records", [])
+                    total_rows = sum(v for v in nr if v is not None) if nr else None
+            except Exception:
+                pass
+
         return DeltaTableInfo(
             name=metadata.name or table_name,
             schema_=schema,
@@ -337,6 +440,11 @@ class DeltaTableReader:
             partition_columns=list(metadata.partition_columns),
             properties=dict(metadata.configuration) if metadata.configuration else {},
             description=metadata.description,
+            reader_version=reader_version,
+            writer_version=writer_version,
+            reader_features=reader_features,
+            writer_features=writer_features,
+            total_rows=total_rows,
         )
 
     async def read_sample(

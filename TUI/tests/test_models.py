@@ -98,3 +98,37 @@ def test_delta_table_info():
     )
     assert len(info.schema_) == 2
     assert info.partition_columns == ["region"]
+
+
+def test_delta_table_info_new_fields():
+    """DeltaTableInfo supports protocol, total_rows, and warnings fields."""
+    info = DeltaTableInfo(
+        name="orders",
+        schema_=[Column(name="id", type="long")],
+        version=10,
+        num_files=5,
+        size_bytes=2048,
+        reader_version=3,
+        writer_version=7,
+        reader_features=["deletionVectors", "columnMapping"],
+        writer_features=["appendOnly", "invariants"],
+        total_rows=1500,
+        warnings=["⚠️ Test warning"],
+    )
+    assert info.reader_version == 3
+    assert info.writer_version == 7
+    assert info.reader_features == ["deletionVectors", "columnMapping"]
+    assert info.writer_features == ["appendOnly", "invariants"]
+    assert info.total_rows == 1500
+    assert info.warnings == ["⚠️ Test warning"]
+
+
+def test_delta_table_info_new_fields_defaults():
+    """New fields have backward-compatible defaults."""
+    info = DeltaTableInfo(name="t")
+    assert info.reader_version == 1
+    assert info.writer_version == 2
+    assert info.reader_features == []
+    assert info.writer_features == []
+    assert info.total_rows is None
+    assert info.warnings == []

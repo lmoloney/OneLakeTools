@@ -14,6 +14,7 @@ from onelake_client.models.table import DeltaTableInfo
 from onelake_client.tables.delta import (
     DeltaTableReader,
     _build_table_uri,
+    _check_reader_warnings,
     _nullify_out_of_range,
     _run_delta_subprocess,
     _schema_to_columns,
@@ -155,6 +156,7 @@ class TestGetMetadata:
         metadata=None,
         add_actions_style="arro3",
         add_actions_sizes=None,
+        protocol=None,
     ):
         """Build a complete mock DeltaTable."""
         dt = MagicMock()
@@ -171,6 +173,17 @@ class TestGetMetadata:
             "part-00001.parquet",
         ]
         dt.metadata.return_value = metadata or _make_mock_metadata()
+
+        # Protocol mock
+        if protocol is None:
+            proto = MagicMock()
+            proto.min_reader_version = 1
+            proto.min_writer_version = 2
+            proto.reader_features = None
+            proto.writer_features = None
+        else:
+            proto = protocol
+        dt.protocol.return_value = proto
 
         sizes = add_actions_sizes or [1000, 2000]
         actions = MagicMock()
@@ -365,6 +378,12 @@ class TestSizeComputationErrors:
         dt.version.return_value = 0
         dt.file_uris.return_value = []
         dt.metadata.return_value = _make_mock_metadata()
+        proto = MagicMock()
+        proto.min_reader_version = 1
+        proto.min_writer_version = 2
+        proto.reader_features = None
+        proto.writer_features = None
+        dt.protocol.return_value = proto
         dt.get_add_actions.side_effect = error
         return dt
 
@@ -1239,3 +1258,246 @@ class TestListFiles:
 
         assert result == []
         assert len(result) == 0
+
+
+# ── Protocol & total_rows extraction ────────────────────────────────────
+
+
+class TestProtocolExtraction:
+    """Test protocol version and feature extraction from DeltaTable."""
+
+    @pytest.fixture()
+    def auth(self):
+        from onelake_client.auth import OneLakeAuth
+        from tests.conftest import FakeCredential
+
+        return OneLakeAuth(credential=FakeCredential())
+
+    def _make_protocol_mock(
+        self,
+        *,
+        min_reader_version=1,
+        min_writer_version=2,
+        reader_features=None,
+        writer_features=None,
+    ):
+        proto = MagicMock()
+        proto.min_reader_version = min_reader_version
+        proto.min_writer_version = min_writer_version
+        proto.reader_features = reader_features
+        proto.writer_features = writer_features
+        return proto
+
+    def _make_dt_mock(self, *, protocol=None, add_actions_column_names=None, num_records=None):
+        """Build a DeltaTable mock with protocol support."""
+        dt = MagicMock()
+        dt.schema.return_value = _make_mock_schema([_make_mock_field("id", "long", nullable=False)])
+        dt.version.return_value = 1
+        dt.file_uris.return_value = ["part-00000.parquet"]
+        dt.metadata.return_value = _make_mock_metadata()
+
+        if protocol is not None:
+            dt.protocol.return_value = protocol
+        else:
+            dt.protocol.return_value = self._make_protocol_mock()
+
+        actions = MagicMock()
+        del actions.to_pydict
+        col_names = add_actions_column_names or ["path", "size_bytes"]
+        actions.column_names = col_names
+
+        def _column(name):
+            col = MagicMock()
+            if name == "size_bytes":
+                col.to_pylist.return_value = [1000]
+            elif name == "num_records" and num_records is not None:
+                col.to_pylist.return_value = num_records
+            else:
+                col.to_pylist.return_value = []
+            return col
+
+        actions.column.side_effect = _column
+        dt.get_add_actions.return_value = actions
+        return dt
+
+    def _patch_reader(self, reader, dt_mock):
+        reader._isolate = False
+        return patch.object(reader, "_load_table_sync", return_value=dt_mock)
+
+    @pytest.mark.asyncio()
+    async def test_protocol_version_extracted(self, auth):
+        """Protocol reader/writer versions are extracted from dt.protocol()."""
+        proto = self._make_protocol_mock(min_reader_version=3, min_writer_version=7)
+        dt_mock = self._make_dt_mock(protocol=proto)
+        reader = DeltaTableReader(auth)
+        with self._patch_reader(reader, dt_mock):
+            info = await reader.get_metadata("ws", "item", "t")
+
+        assert info.reader_version == 3
+        assert info.writer_version == 7
+
+    @pytest.mark.asyncio()
+    async def test_reader_features_extracted(self, auth):
+        """Reader features are extracted as a list from protocol."""
+        proto = self._make_protocol_mock(
+            min_reader_version=3,
+            reader_features=["deletionVectors", "columnMapping"],
+        )
+        dt_mock = self._make_dt_mock(protocol=proto)
+        reader = DeltaTableReader(auth)
+        with self._patch_reader(reader, dt_mock):
+            info = await reader.get_metadata("ws", "item", "t")
+
+        assert info.reader_features == ["deletionVectors", "columnMapping"]
+
+    @pytest.mark.asyncio()
+    async def test_writer_features_extracted(self, auth):
+        """Writer features are extracted as a list from protocol."""
+        proto = self._make_protocol_mock(
+            min_writer_version=7,
+            writer_features=["appendOnly", "invariants", "deletionVectors"],
+        )
+        dt_mock = self._make_dt_mock(protocol=proto)
+        reader = DeltaTableReader(auth)
+        with self._patch_reader(reader, dt_mock):
+            info = await reader.get_metadata("ws", "item", "t")
+
+        assert info.writer_features == ["appendOnly", "invariants", "deletionVectors"]
+
+    @pytest.mark.asyncio()
+    async def test_total_rows_from_add_actions(self, auth):
+        """total_rows is summed from num_records column in add actions."""
+        dt_mock = self._make_dt_mock(
+            add_actions_column_names=["path", "size_bytes", "num_records"],
+            num_records=[100, 200, 50],
+        )
+        reader = DeltaTableReader(auth)
+        with self._patch_reader(reader, dt_mock):
+            info = await reader.get_metadata("ws", "item", "t")
+
+        assert info.total_rows == 350
+
+    @pytest.mark.asyncio()
+    async def test_total_rows_none_when_no_stats(self, auth):
+        """total_rows is None when num_records column is not available."""
+        dt_mock = self._make_dt_mock(
+            add_actions_column_names=["path", "size_bytes"],
+        )
+        reader = DeltaTableReader(auth)
+        with self._patch_reader(reader, dt_mock):
+            info = await reader.get_metadata("ws", "item", "t")
+
+        assert info.total_rows is None
+
+    @pytest.mark.asyncio()
+    async def test_total_rows_skips_none_values(self, auth):
+        """total_rows skips None values in num_records column."""
+        dt_mock = self._make_dt_mock(
+            add_actions_column_names=["path", "size_bytes", "num_records"],
+            num_records=[100, None, 50],
+        )
+        reader = DeltaTableReader(auth)
+        with self._patch_reader(reader, dt_mock):
+            info = await reader.get_metadata("ws", "item", "t")
+
+        assert info.total_rows == 150
+
+    @pytest.mark.asyncio()
+    async def test_protocol_defaults_when_not_available(self, auth):
+        """If protocol() raises, defaults to v1/v2 with no features."""
+        dt_mock = self._make_dt_mock()
+        dt_mock.protocol.side_effect = Exception("protocol not available")
+        reader = DeltaTableReader(auth)
+        with self._patch_reader(reader, dt_mock):
+            info = await reader.get_metadata("ws", "item", "t")
+
+        assert info.reader_version == 1
+        assert info.writer_version == 2
+        assert info.reader_features == []
+        assert info.writer_features == []
+
+
+# ── Reader warnings ────────────────────────────────────────────────────
+
+
+class TestReaderWarnings:
+    """Test _check_reader_warnings populates warnings for unsupported features."""
+
+    def test_warning_for_deletion_vectors(self):
+        info = DeltaTableInfo(reader_features=["deletionVectors"])
+        _check_reader_warnings(info)
+        assert len(info.warnings) == 1
+        assert "deletionVectors" in info.warnings[0]
+        assert "soft-deleted" in info.warnings[0]
+
+    def test_warning_for_v2_checkpoint(self):
+        info = DeltaTableInfo(reader_features=["v2Checkpoint"])
+        _check_reader_warnings(info)
+        assert len(info.warnings) == 1
+        assert "v2Checkpoint" in info.warnings[0]
+
+    def test_warning_for_type_widening(self):
+        info = DeltaTableInfo(reader_features=["typeWidening"])
+        _check_reader_warnings(info)
+        assert len(info.warnings) == 1
+        assert "typeWidening" in info.warnings[0]
+
+    def test_no_warning_for_standard_features(self):
+        """Features not in the unsupported list should not generate warnings."""
+        info = DeltaTableInfo(reader_features=["columnMapping"])
+        _check_reader_warnings(info)
+        assert info.warnings == []
+
+    def test_multiple_unsupported_features(self):
+        info = DeltaTableInfo(reader_features=["deletionVectors", "typeWidening"])
+        _check_reader_warnings(info)
+        assert len(info.warnings) == 2
+
+    def test_no_reader_features(self):
+        info = DeltaTableInfo(reader_features=[])
+        _check_reader_warnings(info)
+        assert info.warnings == []
+
+    def test_mixed_supported_and_unsupported(self):
+        info = DeltaTableInfo(reader_features=["columnMapping", "deletionVectors", "timestampNtz"])
+        _check_reader_warnings(info)
+        assert len(info.warnings) == 1
+        assert "deletionVectors" in info.warnings[0]
+
+    @pytest.fixture()
+    def auth(self):
+        from onelake_client.auth import OneLakeAuth
+        from tests.conftest import FakeCredential
+
+        return OneLakeAuth(credential=FakeCredential())
+
+    @pytest.mark.asyncio()
+    async def test_warnings_populated_via_get_metadata(self, auth):
+        """Warnings are populated during get_metadata flow."""
+        proto = MagicMock()
+        proto.min_reader_version = 3
+        proto.min_writer_version = 7
+        proto.reader_features = ["deletionVectors", "columnMapping"]
+        proto.writer_features = None
+
+        dt = MagicMock()
+        dt.schema.return_value = _make_mock_schema([_make_mock_field("x", "int")])
+        dt.version.return_value = 1
+        dt.file_uris.return_value = []
+        dt.metadata.return_value = _make_mock_metadata()
+        dt.protocol.return_value = proto
+        actions = MagicMock()
+        del actions.to_pydict
+        actions.column_names = ["path", "size_bytes"]
+        size_col = MagicMock()
+        size_col.to_pylist.return_value = [100]
+        actions.column.return_value = size_col
+        dt.get_add_actions.return_value = actions
+
+        reader = DeltaTableReader(auth)
+        reader._isolate = False
+        with patch.object(reader, "_load_table_sync", return_value=dt):
+            info = await reader.get_metadata("ws", "item", "t")
+
+        assert len(info.warnings) == 1
+        assert "deletionVectors" in info.warnings[0]

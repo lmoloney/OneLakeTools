@@ -251,18 +251,39 @@ class DetailPanel(VerticalScroll):
             # ── Schema tab ──────────────────────────────────────────────
             schema_pane = TabPane("Schema", id="tab-schema")
             await tc.add_pane(schema_pane)
+            rows_text = f"  [b]Rows:[/b] {info.total_rows:,}" if info.total_rows is not None else ""
             await schema_pane.mount(
                 Static(
                     f"[b]Version:[/b] {info.version}  "
                     f"[b]Files:[/b] {info.num_files}  "
-                    f"[b]Size:[/b] {_format_size(info.size_bytes)}",
+                    f"[b]Size:[/b] {_format_size(info.size_bytes)}{rows_text}",
                     classes="detail-section",
                 )
             )
+            # Protocol info
+            proto_text = (
+                f"[b]Protocol:[/b] Reader v{info.reader_version} / Writer v{info.writer_version}"
+            )
+            if info.reader_features:
+                proto_text += f"  [b]Reader Features:[/b] {esc(', '.join(info.reader_features))}"
+            if info.writer_features:
+                proto_text += f"  [b]Writer Features:[/b] {esc(', '.join(info.writer_features))}"
+            await schema_pane.mount(Static(proto_text, classes="detail-section"))
             if info.partition_columns:
                 await schema_pane.mount(
                     Static(
                         f"[b]Partitioned by:[/b] {esc(', '.join(info.partition_columns))}",
+                        classes="detail-section",
+                    )
+                )
+            # Clustering columns (liquid clustering)
+            clustering_cols = info.properties.get("clusteringColumns")
+            if not clustering_cols:
+                clustering_cols = info.properties.get("delta.liquid.clustering.table.columns")
+            if clustering_cols:
+                await schema_pane.mount(
+                    Static(
+                        f"[b]Clustered by:[/b] {esc(clustering_cols)}",
                         classes="detail-section",
                     )
                 )
@@ -273,6 +294,15 @@ class DetailPanel(VerticalScroll):
                         classes="detail-section",
                     )
                 )
+            # Proactive warnings
+            if info.warnings:
+                for warning in info.warnings:
+                    await schema_pane.mount(
+                        Static(
+                            f"[yellow]{esc(warning)}[/yellow]",
+                            classes="detail-section",
+                        )
+                    )
             if info.schema_:
                 await schema_pane.mount(Label("Columns", classes="detail-title"))
                 schema_table = DataTable()
@@ -342,13 +372,13 @@ class DetailPanel(VerticalScroll):
                         classes="detail-section",
                     )
                 )
-            elif "reader features" in err_msg and "not yet supported" in err_msg:
+            elif "reader features" in err_msg or "minimum reader version" in err_msg:
                 self.mount(
                     Static(
                         "⚠️ [yellow]This table uses advanced Delta features "
-                        "(e.g. deletion vectors) not fully supported by the local reader. "
-                        "Schema and history tabs may still work — "
-                        "try the Data tab for a raw parquet preview.[/yellow]",
+                        "not fully supported by the local reader. "
+                        "Metadata could not be loaded — browse the table's "
+                        "files directly in the tree view.[/yellow]",
                         classes="detail-section",
                     )
                 )
@@ -398,8 +428,9 @@ class DetailPanel(VerticalScroll):
                         ci = obj["commitInfo"]
                         fname = path_info.name.split("/")[-1]
                         version = fname.replace(".json", "").lstrip("0") or "0"
-                        # Use commitInfo.timestamp (ms epoch), fall back to file lastModified
-                        ts_raw = ci.get("timestamp")
+                        # Prefer inCommitTimestamp (more accurate for
+                        # ICT-enabled tables)
+                        ts_raw = ci.get("inCommitTimestamp") or ci.get("timestamp")
                         if ts_raw is None and path_info.last_modified:
                             ts_raw = path_info.last_modified
                         file_commits.append(
@@ -497,8 +528,8 @@ class DetailPanel(VerticalScroll):
             await self._render_data_table(data_pane, sample)
         except Exception as e:
             err_msg = str(e)
-            # Handle unsupported reader features (e.g. deletionVectors)
-            if "reader features" in err_msg and "not yet supported" in err_msg:
+            # Handle unsupported reader features (e.g. deletionVectors, timestampNtz)
+            if "reader features" in err_msg or "minimum reader version" in err_msg:
                 logger.debug(
                     "Delta reader unsupported features, falling back to DFS parquet: %s", e
                 )
@@ -507,7 +538,7 @@ class DetailPanel(VerticalScroll):
                 await data_pane.mount(
                     Static(
                         "⚠️ [yellow]Table uses advanced Delta features "
-                        "(e.g. deletion vectors) not supported by the local reader. "
+                        "not supported by the local reader. "
                         "Falling back to raw parquet preview — "
                         "may include soft-deleted rows.[/yellow]",
                         classes="detail-section",
@@ -656,7 +687,11 @@ class DetailPanel(VerticalScroll):
             col_names = cdf_table.column_names
             tbl.add_columns(*col_names)
             for row_idx in range(min(cdf_table.num_rows, 100)):
-                row = [str(cdf_table.column(c)[row_idx]) for c in range(len(col_names))]
+                row = []
+                for c in range(len(col_names)):
+                    val = cdf_table.column(c)[row_idx]
+                    # arro3 Scalars need .as_py() to get the Python value
+                    row.append(str(val.as_py() if hasattr(val, "as_py") else val))
                 tbl.add_row(*row)
         except Exception as e:
             with contextlib.suppress(NoMatches):

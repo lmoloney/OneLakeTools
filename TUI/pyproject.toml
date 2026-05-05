@@ -44,6 +44,8 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "pytest-httpx>=0.34",
+    "pytest-timeout>=2.3",
+    "syrupy>=4.0",
     "ruff>=0.8",
 ]
 
@@ -57,6 +59,11 @@ packages = ["src/onelake_client", "src/onelake_tui"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "integration: requires live Fabric workspace and az login",
+    "iceberg: requires Iceberg REST Catalog endpoint",
+    "slow: tests that take longer than 10 seconds",
+]
 
 [tool.ruff]
 target-version = "py311"

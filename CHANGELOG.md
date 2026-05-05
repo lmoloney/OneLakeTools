@@ -8,9 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Comprehensive fixture-based test suite — 138 new tests exercising real Delta log parsing, Parquet schema introspection, path encoding, tree widget edge cases, and snapshot regression detection
+- Committed test fixtures: 5 Delta tables (`basic_table`, `partitioned_table`, `column_mapping_v2`, `cdf_enabled`, `unicode_paths`) and 3 Parquet files (`all_types`, `nested_structs`, `dictionary_encoded`)
+- `syrupy` snapshot tests for Delta metadata and Parquet schema regression detection
+- Registered pytest markers (`integration`, `iceberg`, `slow`) in `pyproject.toml`
+- Integration test CI workflow (`integration.yml`) — runs on push to `main`, nightly, and manual dispatch with OIDC-authenticated Fabric access
+- Expanded live integration tests from 6 to 11 — workspace filtering, item field validation, DFS subdirectory browsing, lakehouse properties, Delta column assertions
 - `coerce_timestamps` public helper in `onelake_client.tables` for safely downcasting `timestamp[ns]` columns to `timestamp[us]`
 - CI job that enforces `CHANGELOG.md` updates on user-facing PRs (skip with `chore` or `documentation` label)
 - Code-review instructions (`.github/instructions/code-review.instructions.md`) covering changelog, docs, Rich markup, and pyarrow conventions
+- Manifest-driven integration test configuration (`fabric-test-env.json`) replacing environment-variable-only approach — auto-detected from `tests/integration/`, with env-var and XDG fallback
+- 5 new integration test files: DFS browsing, Delta tables (10 tables), file operations, schema lakehouse, warehouse + Iceberg
+- 3 new TUI graphical test files: navigation flow, file previews, table metadata views
+- Enhanced format parser tests covering CSV, JSON, Markdown, and Parquet edge cases
+- Deletion vector table provisioned in test environment for protocol-level coverage
+- Both GUID and friendly-name DFS addressing modes tested across integration suite
+- `nested_types.parquet` test fixture uploaded with struct, array, and map columns
 
 ### Fixed
 
