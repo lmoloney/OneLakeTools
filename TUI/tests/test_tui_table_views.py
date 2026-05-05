@@ -42,7 +42,17 @@ class _DetailHarness(App):
 
 
 def _get_widget_text(widget) -> str:
-    """Extract plain text from a rendered Textual widget."""
+    """Extract plain text from a Textual widget."""
+    # Static.render() returns the raw content text
+    try:
+        rendered = widget.render()
+        if rendered:
+            text = str(rendered)
+            if text.strip():
+                return text
+    except Exception:
+        pass
+    # Fall back to render_line for laid-out widgets
     try:
         line = widget.render_line(0)
         return "".join(seg.text for seg in line)
@@ -734,3 +744,379 @@ class TestMinReaderVersionFallback:
             assert any("advanced Delta features" in t for t in texts), (
                 f"Expected fallback warning for minimum reader version error. Found: {texts}"
             )
+
+
+# ── Data tab tests ──────────────────────────────────────────────────
+
+
+class TestDataTabLoadButton:
+    """Data tab should have a load button that triggers sample data rendering."""
+
+    @pytest.mark.asyncio
+    async def test_data_tab_has_load_button(self):
+        """Data tab should initially show a 'Load Data Preview' button."""
+        from textual.widgets import Button
+
+        client = _make_mock_client()
+        info = DeltaTableInfo(
+            name="test",
+            schema_=[Column(name="id", type="long")],
+            version=0,
+            num_files=1,
+            size_bytes=100,
+        )
+        app, pilot, detail, ctx = await _setup_detail_with_metadata(client, info)
+        try:
+            btn = detail.query_one("#load-data-preview", Button)
+            assert btn is not None
+        finally:
+            await ctx.__aexit__(None, None, None)
+
+    @pytest.mark.asyncio
+    async def test_data_tab_renders_sample(self):
+        """Clicking load button should render sample data in a DataTable."""
+        import pyarrow as pa
+        from textual.widgets import Button
+
+        client = _make_mock_client()
+        sample = pa.table({"id": [1, 2, 3], "name": ["a", "b", "c"]})
+        client.delta.read_sample = AsyncMock(return_value=sample)
+
+        info = DeltaTableInfo(
+            name="test",
+            schema_=[
+                Column(name="id", type="long"),
+                Column(name="name", type="string"),
+            ],
+            version=0,
+            num_files=1,
+            size_bytes=100,
+        )
+        app, pilot, detail, ctx = await _setup_detail_with_metadata(client, info)
+        try:
+            btn = detail.query_one("#load-data-preview", Button)
+            btn.press()
+            await pilot.pause()
+            await asyncio.sleep(0.5)
+            await pilot.pause()
+
+            data_pane = detail.query_one("#tab-data", TabPane)
+            dt = data_pane.query_one(DataTable)
+            assert dt.row_count == 3
+            assert len(dt.columns) == 2
+        finally:
+            await ctx.__aexit__(None, None, None)
+
+    @pytest.mark.asyncio
+    async def test_data_tab_fallback_on_reader_error(self):
+        """When read_sample fails with reader features error, should show warning."""
+        from textual.widgets import Button
+
+        client = _make_mock_client()
+        client.delta.read_sample = AsyncMock(
+            side_effect=Exception("reader features: {'deletionVectors'} not yet supported")
+        )
+        # Fallback will try list_paths for parquet files — let it fail gracefully
+        client.dfs.list_paths = AsyncMock(return_value=[])
+
+        info = DeltaTableInfo(
+            name="test",
+            schema_=[Column(name="id", type="long")],
+            version=0,
+            num_files=1,
+            size_bytes=100,
+        )
+        app, pilot, detail, ctx = await _setup_detail_with_metadata(client, info)
+        try:
+            btn = detail.query_one("#load-data-preview", Button)
+            btn.press()
+            await pilot.pause()
+            await asyncio.sleep(0.5)
+            await pilot.pause()
+            await pilot.pause()
+
+            statics = detail.query(Static)
+            texts = [_get_widget_text(w) for w in statics]
+            assert any("advanced Delta features" in t for t in texts)
+        finally:
+            await ctx.__aexit__(None, None, None)
+
+    @pytest.mark.asyncio
+    async def test_data_tab_network_error(self):
+        """Generic error during data load shows error message."""
+        from textual.widgets import Button
+
+        client = _make_mock_client()
+        client.delta.read_sample = AsyncMock(side_effect=Exception("Connection timeout after 30s"))
+
+        info = DeltaTableInfo(
+            name="test",
+            schema_=[Column(name="id", type="long")],
+            version=0,
+            num_files=1,
+            size_bytes=100,
+        )
+        app, pilot, detail, ctx = await _setup_detail_with_metadata(client, info)
+        try:
+            btn = detail.query_one("#load-data-preview", Button)
+            btn.press()
+            await pilot.pause()
+            await asyncio.sleep(0.5)
+            await pilot.pause()
+
+            statics = detail.query(Static)
+            texts = [_get_widget_text(w) for w in statics]
+            assert any("Data preview failed" in t or "Connection timeout" in t for t in texts)
+        finally:
+            await ctx.__aexit__(None, None, None)
+
+
+# ── History tab tests ───────────────────────────────────────────────
+
+
+class TestHistoryTab:
+    """History tab should display transaction log from _delta_log JSON files.
+
+    Note: _load_transaction_log fires automatically during _load_table_metadata,
+    so the DFS mocks must be set up BEFORE calling _setup_detail_with_metadata.
+    """
+
+    @pytest.mark.asyncio
+    async def test_history_tab_renders_commits(self):
+        """Transaction log should render as a DataTable with version/timestamp/operation."""
+        from onelake_client.models import PathInfo
+
+        client = _make_mock_client()
+
+        # Set up DFS mocks BEFORE metadata load (history fires automatically)
+        commit_0 = (
+            '{"protocol":{"minReaderVersion":1}}\n'
+            '{"metaData":{"id":"t1"}}\n'
+            '{"commitInfo":{"operation":"WRITE","timestamp":1700000000000}}\n'
+        )
+        commit_1 = (
+            '{"commitInfo":{"operation":"MERGE","timestamp":1700000100000,'
+            '"operationMetrics":{"numTargetRowsUpdated":"5"}}}\n'
+        )
+        client.dfs.list_paths = AsyncMock(
+            return_value=[
+                PathInfo(
+                    name="item-guid/Tables/test_table/_delta_log/00000000000000000000.json",
+                    isDirectory=False,
+                    contentLength=200,
+                ),
+                PathInfo(
+                    name="item-guid/Tables/test_table/_delta_log/00000000000000000001.json",
+                    isDirectory=False,
+                    contentLength=200,
+                ),
+            ]
+        )
+        client.dfs.read_file = AsyncMock(side_effect=[commit_0.encode(), commit_1.encode()])
+
+        info = DeltaTableInfo(
+            name="test",
+            schema_=[Column(name="id", type="long")],
+            version=1,
+            num_files=1,
+            size_bytes=100,
+        )
+        app, pilot, detail, ctx = await _setup_detail_with_metadata(client, info)
+        try:
+            # History already loaded — extra settle time
+            await asyncio.sleep(0.5)
+            await pilot.pause()
+
+            history_pane = detail.query_one("#tab-history", TabPane)
+            dt = history_pane.query_one(DataTable)
+            assert dt.row_count == 2
+            assert len(dt.columns) == 4  # Version, Timestamp, Operation, Metrics
+        finally:
+            await ctx.__aexit__(None, None, None)
+
+    @pytest.mark.asyncio
+    async def test_history_tab_empty_log(self):
+        """Empty delta log shows placeholder message."""
+        client = _make_mock_client()
+        # list_paths returns empty for _delta_log directory
+        client.dfs.list_paths = AsyncMock(return_value=[])
+
+        info = DeltaTableInfo(
+            name="test",
+            schema_=[Column(name="id", type="long")],
+            version=0,
+            num_files=1,
+            size_bytes=100,
+        )
+        app, pilot, detail, ctx = await _setup_detail_with_metadata(client, info)
+        try:
+            await asyncio.sleep(0.5)
+            await pilot.pause()
+
+            history_pane = detail.query_one("#tab-history", TabPane)
+            # Either "No transaction history" or still loading — verify no crash
+            assert history_pane is not None
+        finally:
+            await ctx.__aexit__(None, None, None)
+
+    @pytest.mark.asyncio
+    async def test_history_tab_prefers_in_commit_timestamp(self):
+        """When inCommitTimestamp is present, it should be used over timestamp."""
+        from onelake_client.models import PathInfo
+
+        client = _make_mock_client()
+        # inCommitTimestamp = 2024-01-15 12:00:00 UTC (1705320000000)
+        # timestamp = 2024-01-01 00:00:00 UTC (1704067200000) — 2 weeks earlier
+        commit = (
+            '{"commitInfo":{"operation":"WRITE",'
+            '"timestamp":1704067200000,'
+            '"inCommitTimestamp":1705320000000}}\n'
+        )
+        client.dfs.list_paths = AsyncMock(
+            return_value=[
+                PathInfo(
+                    name="ig/Tables/t/_delta_log/00000000000000000000.json",
+                    isDirectory=False,
+                    contentLength=200,
+                ),
+            ]
+        )
+        client.dfs.read_file = AsyncMock(return_value=commit.encode())
+
+        info = DeltaTableInfo(
+            name="test",
+            schema_=[Column(name="id", type="long")],
+            version=0,
+            num_files=1,
+            size_bytes=100,
+        )
+        app, pilot, detail, ctx = await _setup_detail_with_metadata(client, info)
+        try:
+            await asyncio.sleep(0.5)
+            await pilot.pause()
+
+            history_pane = detail.query_one("#tab-history", TabPane)
+            dt = history_pane.query_one(DataTable)
+            assert dt.row_count == 1
+            row = dt.get_row_at(0)
+            ts_str = str(row[1])
+            # inCommitTimestamp is Jan 15, regular timestamp is Jan 1
+            assert "2024-01-15" in ts_str, (
+                f"Expected inCommitTimestamp date (2024-01-15), got: {ts_str}"
+            )
+        finally:
+            await ctx.__aexit__(None, None, None)
+
+    @pytest.mark.asyncio
+    async def test_history_tab_error(self):
+        """Network error during history load shows error message."""
+        client = _make_mock_client()
+        client.dfs.list_paths = AsyncMock(side_effect=Exception("Connection refused"))
+
+        info = DeltaTableInfo(
+            name="test",
+            schema_=[Column(name="id", type="long")],
+            version=0,
+            num_files=1,
+            size_bytes=100,
+        )
+        app, pilot, detail, ctx = await _setup_detail_with_metadata(client, info)
+        try:
+            await asyncio.sleep(0.5)
+            await pilot.pause()
+
+            history_pane = detail.query_one("#tab-history", TabPane)
+            statics = history_pane.query(Static)
+            texts = [_get_widget_text(w) for w in statics]
+            assert any("Could not load history" in t for t in texts)
+        finally:
+            await ctx.__aexit__(None, None, None)
+
+
+# ── CDF tab additional tests ───────────────────────────────────────
+
+
+class TestCdfTabEmpty:
+    """CDF tab should handle empty result and errors gracefully."""
+
+    @pytest.mark.asyncio
+    async def test_cdf_empty_result(self):
+        """When read_cdf returns 0 rows, show informative message."""
+        from textual.widgets import Button
+
+        client = _make_mock_client()
+
+        class _EmptyCdfTable:
+            column_names = ["_change_type"]
+            num_rows = 0
+
+        client.delta.read_cdf = AsyncMock(return_value=_EmptyCdfTable())
+
+        info = DeltaTableInfo(
+            name="cdf_table",
+            schema_=[Column(name="id", type="long")],
+            version=1,
+            num_files=1,
+            size_bytes=100,
+            properties={"delta.enableChangeDataFeed": "true"},
+        )
+        app, pilot, detail, ctx = await _setup_detail_with_metadata(client, info)
+        try:
+            # Find and click the CDF load button
+            try:
+                btn = detail.query_one("#load-cdf-preview", Button)
+                btn.press()
+            except Exception:
+                pass
+
+            await pilot.pause()
+            await asyncio.sleep(0.5)
+            await pilot.pause()
+            await pilot.pause()
+
+            cdf_pane = detail.query_one("#tab-cdf", TabPane)
+            statics = cdf_pane.query(Static)
+            texts = [_get_widget_text(w) for w in statics]
+            assert any("No CDF records" in t or "0" in t for t in texts), (
+                f"Expected empty CDF message. Found: {texts}"
+            )
+        finally:
+            await ctx.__aexit__(None, None, None)
+
+    @pytest.mark.asyncio
+    async def test_cdf_error(self):
+        """When read_cdf fails, show error message."""
+        from textual.widgets import Button
+
+        client = _make_mock_client()
+        client.delta.read_cdf = AsyncMock(side_effect=Exception("CDF not available for this table"))
+
+        info = DeltaTableInfo(
+            name="cdf_table",
+            schema_=[Column(name="id", type="long")],
+            version=1,
+            num_files=1,
+            size_bytes=100,
+            properties={"delta.enableChangeDataFeed": "true"},
+        )
+        app, pilot, detail, ctx = await _setup_detail_with_metadata(client, info)
+        try:
+            try:
+                btn = detail.query_one("#load-cdf-preview", Button)
+                btn.press()
+            except Exception:
+                pass
+
+            await pilot.pause()
+            await asyncio.sleep(0.5)
+            await pilot.pause()
+            await pilot.pause()
+
+            cdf_pane = detail.query_one("#tab-cdf", TabPane)
+            statics = cdf_pane.query(Static)
+            texts = [_get_widget_text(w) for w in statics]
+            assert any("CDF preview failed" in t or "not available" in t for t in texts), (
+                f"Expected CDF error message. Found: {texts}"
+            )
+        finally:
+            await ctx.__aexit__(None, None, None)

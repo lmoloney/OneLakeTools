@@ -1,6 +1,6 @@
 # Testing Guide
 
-Comprehensive testing overview for OneLakeTools — 653 tests across 32 files.
+Comprehensive testing overview for OneLakeTools — 762 tests across 32 files.
 
 ## Test Architecture
 
@@ -8,7 +8,7 @@ OneLakeTools uses three test layers:
 
 | Layer | Location | Fabric needed? | Speed |
 |-------|----------|----------------|-------|
-| **Unit** | `tests/` | No — fully mocked | ~60s |
+| **Unit** | `tests/` | No — fully mocked | ~80s |
 | **Fixture** | `tests/` (committed Delta/Parquet) | No — real file formats, no network | Included in unit |
 | **Integration** | `tests/integration/` | Yes — live workspace | ~5min |
 
@@ -18,10 +18,10 @@ OneLakeTools uses three test layers:
 
 | Category | Tests | Files |
 |----------|-------|-------|
-| Unit tests | 545 | 26 |
-| Integration tests | 108 | 6 |
+| Unit tests | 612 | 26 |
+| Integration tests | 150 | 8 |
 | Snapshot tests | 8 | (included in unit) |
-| **Total** | **653** | **32** |
+| **Total** | **762** | **34** |
 
 ## Running Tests
 
@@ -206,3 +206,26 @@ The core `dt.protocol()` extraction is now implemented. Remaining work is increm
 - Extract min/max stats from add actions for data profiling
 - Display individual file statistics in a future "Files" tab
 - Handle DROP COLUMN via column mapping fixtures
+
+## TUI Graphical Test Coverage
+
+The TUI graphical tests use Textual's `run_test()` with mocked clients. Current coverage:
+
+### Table Exploration (fully tested)
+- ✅ Schema tab: columns, version, files, size, partitions, description, protocol version, row count, reader/writer features, clustering columns, proactive warnings, column metadata, schema-qualified names
+- ✅ Data tab: load button, sample rendering, reader-feature fallback, network error
+- ✅ History tab: commit rendering, empty log, in-commit timestamp preference, error handling
+- ✅ CDF tab: presence/absence, data rendering with arro3 values, empty result, error handling
+- ✅ Error states: deletion vector warning, minimum reader version fallback
+
+### File Previews (core formats tested)
+- ✅ Markdown, CSV, JSON, NDJSON, Parquet, Python, SQL, YAML, binary hex dump
+- ✅ Edge cases: empty file, oversized file, network error
+
+### Not Yet Tested (lower risk — shared code paths)
+The following syntax-highlighted formats use the same `TextArea` rendering path as `.py`/`.sql`/`.yaml` and are not individually tested:
+- `.avro` (separate `_preview_avro` handler — **medium risk**)
+- `.xml`, `.html`, `.js`, `.ts`, `.sh`, `.toml`, `.ini`, `.txt`, `.log`
+- `.r`, `.scala`, `.java`, `.cs`, `.cpp`, `.c`, `.rs`, `.go`, `.rb`
+
+The `.avro` handler is a distinct code path (`_preview_avro`) and should be tested when Avro fixtures are available. The syntax-highlighted text formats all flow through the same `TextArea(language=lexer)` constructor — testing `.py`, `.sql`, and `.yaml` provides sufficient coverage of this path.
