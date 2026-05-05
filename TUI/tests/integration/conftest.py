@@ -33,8 +33,15 @@ _USER_MANIFEST = Path.home() / ".config" / "onelaketools" / "fabric-test-env.jso
 def _load_manifest() -> dict | None:
     """Load fabric-test-env.json — env override → in-repo → user home.
 
-    Env vars (ONELAKE_TEST_WORKSPACE_ID etc.) always take priority over
-    manifest values when set — see the config resolution section below.
+    The manifest is the single source of truth for the test environment.
+    It defines workspace ID, item IDs, expected tables/files, and per-table
+    Delta feature metadata. All fixtures (lakehouse_schema_item, warehouse_item,
+    etc.) read from this manifest — they are not individually overridable via
+    env vars because item IDs must be consistent within a workspace.
+
+    To point at a different test environment entirely, set ONELAKE_TEST_ENV_FILE
+    to your own manifest file. Individual env vars (ONELAKE_TEST_WORKSPACE_ID,
+    ONELAKE_TEST_LAKEHOUSE_ID, etc.) override the primary lakehouse config only.
     """
     env_path = os.environ.get("ONELAKE_TEST_ENV_FILE")
     for candidate in [

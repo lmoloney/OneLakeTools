@@ -16,8 +16,12 @@ jobs:
     name: Live Fabric Tests
     runs-on: ubuntu-latest
     environment: fabric-test
-    # Don't fail the overall workflow on integration test flakiness,
-    # but the job itself still reports failure for visibility.
+    # INTENTIONAL: continue-on-error is set because integration tests hit a live
+    # Fabric workspace that may be unavailable, rate-limited, or have capacity
+    # issues outside our control. The job still reports failure in the Actions UI
+    # (with a ::warning annotation), but the workflow status stays green so it
+    # doesn't block unrelated PRs. This is the standard pattern for live-service
+    # integration tests. See the "Report test outcome" step below.
     continue-on-error: true
 
     steps:
