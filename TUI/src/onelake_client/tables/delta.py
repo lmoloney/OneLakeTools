@@ -338,9 +338,7 @@ class DeltaTableReader:
         """Get fresh storage options with a current token."""
         return self._auth.storage_options()
 
-    async def _resolve_uri(
-        self, workspace: str, item_path: str, table_name: str
-    ) -> str:
+    async def _resolve_uri(self, workspace: str, item_path: str, table_name: str) -> str:
         """Build an abfss URI, resolving friendly names to GUIDs when needed.
 
         Delta-rs uses the Azure Blob API protocol, which doesn't resolve
@@ -362,9 +360,7 @@ class DeltaTableReader:
 
         return _build_table_uri(ws, item, table_name, self._dfs_host)
 
-    async def _resolve_to_guids(
-        self, workspace: str, item_path: str
-    ) -> tuple[str, str]:
+    async def _resolve_to_guids(self, workspace: str, item_path: str) -> tuple[str, str]:
         """Resolve workspace name + item display path to GUIDs.
 
         Results are cached for the lifetime of this reader instance.
@@ -400,7 +396,7 @@ class DeltaTableReader:
                     "format (e.g. 'MyLakehouse.Lakehouse') or a GUID."
                 )
             item_name = item_path[:dot_idx]
-            item_type = item_path[dot_idx + 1:]
+            item_type = item_path[dot_idx + 1 :]
             items = await self._fabric.list_items(ws_id, item_type=item_type)
             matches = [i for i in items if i.display_name == item_name]
             if len(matches) == 0:

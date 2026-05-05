@@ -202,9 +202,7 @@ class TestRequestWithRetry:
 
         async with httpx.AsyncClient() as client:
             with pytest.raises(AuthenticationError):
-                await request_with_retry(
-                    client, "GET", TEST_URL, on_auth_error=on_auth_error
-                )
+                await request_with_retry(client, "GET", TEST_URL, on_auth_error=on_auth_error)
         assert callback_called
 
     async def test_404_raises_not_found_error_no_retry(self, httpx_mock):
