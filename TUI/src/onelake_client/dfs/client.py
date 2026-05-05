@@ -183,10 +183,11 @@ class DfsClient:
             workspace: Workspace name or GUID.
             path: Full path within the workspace
                   (e.g., "MyLakehouse.Lakehouse/Files/data.csv").
-            max_bytes: Optional size limit. If the server reports a
+            max_bytes: Optional size limit. A HEAD request is issued first
+                to check the file size. If the server reports a
                 ``Content-Length`` exceeding this value, a
                 :class:`~onelake_client.exceptions.FileTooLargeError` is
-                raised *before* the body is read.
+                raised *before* the body is downloaded.
 
         Returns:
             File content as bytes.
@@ -196,21 +197,22 @@ class DfsClient:
         """
         client = await self._get_client()
         headers = _dfs_headers(await self._auth.dfs_headers_async())
+        url = f"{self._base_url}/{workspace}/{path}"
 
-        response = await request_with_retry(
-            client,
-            "GET",
-            f"{self._base_url}/{workspace}/{path}",
-            headers=headers,
-            on_auth_error=self._on_auth_error,
-        )
-
+        # Check file size with HEAD before downloading the body
         if max_bytes is not None:
-            content_length = response.headers.get("Content-Length")
+            head_response = await request_with_retry(
+                client, "HEAD", url, headers=headers, on_auth_error=self._on_auth_error
+            )
+            content_length = head_response.headers.get("Content-Length")
             if content_length is not None:
                 size = int(content_length)
                 if size > max_bytes:
                     raise FileTooLargeError(size=size, max_bytes=max_bytes)
+
+        response = await request_with_retry(
+            client, "GET", url, headers=headers, on_auth_error=self._on_auth_error
+        )
 
         return response.content
 

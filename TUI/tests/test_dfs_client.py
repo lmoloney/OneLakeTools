@@ -64,6 +64,60 @@ async def test_read_file(httpx_mock, auth):
     await client.close()
 
 
+async def test_read_file_max_bytes_head_check_rejects(httpx_mock, auth):
+    """HEAD-first check should raise FileTooLargeError before downloading body."""
+    from onelake_client.exceptions import FileTooLargeError
+
+    url = f"{BASE_URL}/my-workspace/MyLakehouse.Lakehouse/Files/big.bin"
+    # HEAD response reports file is 10MB
+    httpx_mock.add_response(url=url, method="HEAD", headers={"Content-Length": "10485760"})
+    # GET should NOT be called — if it is, the test will fail
+    # because pytest-httpx raises on unexpected requests
+
+    client = DfsClient(auth)
+    with pytest.raises(FileTooLargeError) as exc_info:
+        await client.read_file(
+            "my-workspace", "MyLakehouse.Lakehouse/Files/big.bin", max_bytes=1024
+        )
+    assert exc_info.value.size == 10485760
+    assert exc_info.value.max_bytes == 1024
+
+    # Verify only 1 request was made (HEAD), not a GET
+    requests = httpx_mock.get_requests()
+    assert len(requests) == 1
+    assert requests[0].method == "HEAD"
+
+    await client.close()
+
+
+async def test_read_file_max_bytes_within_limit(httpx_mock, auth):
+    """HEAD reports size within limit, so file is downloaded normally."""
+    url = f"{BASE_URL}/my-workspace/MyLakehouse.Lakehouse/Files/small.txt"
+    httpx_mock.add_response(url=url, method="HEAD", headers={"Content-Length": "11"})
+    httpx_mock.add_response(url=url, method="GET", content=b"hello world")
+
+    client = DfsClient(auth)
+    content = await client.read_file(
+        "my-workspace", "MyLakehouse.Lakehouse/Files/small.txt", max_bytes=1024
+    )
+    assert content == b"hello world"
+    await client.close()
+
+
+async def test_read_file_no_max_bytes_skips_head(httpx_mock, auth):
+    """Without max_bytes, no HEAD request should be issued."""
+    url = f"{BASE_URL}/my-workspace/MyLakehouse.Lakehouse/Files/test.txt"
+    httpx_mock.add_response(url=url, method="GET", content=b"data")
+
+    client = DfsClient(auth)
+    content = await client.read_file("my-workspace", "MyLakehouse.Lakehouse/Files/test.txt")
+    assert content == b"data"
+
+    requests = httpx_mock.get_requests()
+    assert all(r.method == "GET" for r in requests)
+    await client.close()
+
+
 async def test_get_properties(httpx_mock, auth):
     httpx_mock.add_response(
         url=f"{BASE_URL}/my-workspace/MyLakehouse.Lakehouse/Files/test.txt",
