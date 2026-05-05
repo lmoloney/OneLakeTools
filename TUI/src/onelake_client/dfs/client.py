@@ -151,7 +151,7 @@ class DfsClient:
             List of PathInfo objects.
         """
         client = await self._get_client()
-        headers = _dfs_headers(self._auth.dfs_headers())
+        headers = _dfs_headers(await self._auth.dfs_headers_async())
 
         full_directory = f"{item_path}/{directory}" if directory else item_path
 
@@ -188,7 +188,7 @@ class DfsClient:
             FileTooLargeError: If the file exceeds *max_bytes*.
         """
         client = await self._get_client()
-        headers = _dfs_headers(self._auth.dfs_headers())
+        headers = _dfs_headers(await self._auth.dfs_headers_async())
 
         response = await request_with_retry(
             client,
@@ -222,7 +222,7 @@ class DfsClient:
             Chunks of file content.
         """
         client = await self._get_client()
-        headers = _dfs_headers(self._auth.dfs_headers())
+        headers = _dfs_headers(await self._auth.dfs_headers_async())
 
         stream_timeout = httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0)
         async with client.stream(
@@ -261,7 +261,7 @@ class DfsClient:
             FileProperties with size, content type, last modified, etc.
         """
         client = await self._get_client()
-        headers = _dfs_headers(self._auth.dfs_headers())
+        headers = _dfs_headers(await self._auth.dfs_headers_async())
 
         response = await request_with_retry(
             client,

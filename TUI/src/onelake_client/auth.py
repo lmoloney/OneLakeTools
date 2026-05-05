@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -175,14 +176,30 @@ class OneLakeAuth:
         return identity
 
     def fabric_headers(self) -> dict[str, str]:
-        """Authorization headers for Fabric REST API requests."""
+        """Authorization headers for Fabric REST API requests (sync)."""
         token = self.get_token(self._env.fabric_scope)
         return {"Authorization": f"Bearer {token}"}
 
+    async def fabric_headers_async(self) -> dict[str, str]:
+        """Authorization headers for Fabric REST API requests (async).
+
+        Wraps the blocking credential call in a thread to avoid
+        freezing the event loop during token acquisition or refresh.
+        """
+        return await asyncio.to_thread(self.fabric_headers)
+
     def dfs_headers(self) -> dict[str, str]:
-        """Authorization headers for OneLake DFS and Table API requests."""
+        """Authorization headers for OneLake DFS and Table API requests (sync)."""
         token = self.get_token(self._env.storage_scope)
         return {"Authorization": f"Bearer {token}"}
+
+    async def dfs_headers_async(self) -> dict[str, str]:
+        """Authorization headers for OneLake DFS and Table API requests (async).
+
+        Wraps the blocking credential call in a thread to avoid
+        freezing the event loop during token acquisition or refresh.
+        """
+        return await asyncio.to_thread(self.dfs_headers)
 
     def storage_options(self) -> dict[str, Any]:
         """Storage options dict for deltalake / pyiceberg libraries."""

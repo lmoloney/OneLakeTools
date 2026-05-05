@@ -54,7 +54,7 @@ class FabricClient:
         GET /v1/workspaces — paginated via continuationToken.
         """
         client = await self._get_client()
-        headers = self._auth.fabric_headers()
+        headers = await self._auth.fabric_headers_async()
         workspaces: list[Workspace] = []
 
         async for item in paginate_fabric(client, f"{self._base_url}/workspaces", headers=headers):
@@ -77,7 +77,7 @@ class FabricClient:
             item_type: Optional filter — e.g., "Lakehouse", "Warehouse", "Notebook".
         """
         client = await self._get_client()
-        headers = self._auth.fabric_headers()
+        headers = await self._auth.fabric_headers_async()
         params: dict[str, str] = {}
         if item_type:
             params["type"] = item_type
@@ -99,7 +99,7 @@ class FabricClient:
         GET /v1/workspaces/{workspaceId}/lakehouses
         """
         client = await self._get_client()
-        headers = self._auth.fabric_headers()
+        headers = await self._auth.fabric_headers_async()
         lakehouses: list[Lakehouse] = []
 
         async for raw in paginate_fabric(
@@ -118,7 +118,7 @@ class FabricClient:
         Returns SQL endpoint info, OneLake paths, and properties.
         """
         client = await self._get_client()
-        headers = self._auth.fabric_headers()
+        headers = await self._auth.fabric_headers_async()
 
         response = await request_with_retry(
             client,
