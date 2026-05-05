@@ -258,17 +258,25 @@ class TestDeletionVectorsDetection:
     """Test that unsupported reader feature errors are detected."""
 
     def test_detects_reader_features_error(self):
-        """Error message containing 'reader features' and 'not yet supported' is caught."""
+        """Error message containing 'reader features' is caught."""
         err = (
             "The table has set these reader features: {'deletionVectors'} "
             "but these are not yet supported by the deltalake reader."
         )
         assert "reader features" in err
-        assert "not yet supported" in err
+
+    def test_detects_minimum_reader_version_error(self):
+        """Error about minimum reader version is also caught."""
+        err = (
+            "The table's minimum reader version is 2 but deltalake only supports "
+            "version 1 or 3 with these reader features: {'timestampNtz'}"
+        )
+        assert "minimum reader version" in err
 
     def test_does_not_match_unrelated_error(self):
         err = "Network timeout after 30 seconds"
-        assert not ("reader features" in err and "not yet supported" in err)
+        assert "reader features" not in err
+        assert "minimum reader version" not in err
 
 
 # ── Tree arrow key navigation ───────────────────────────────────────────

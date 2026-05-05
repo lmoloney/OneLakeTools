@@ -372,11 +372,11 @@ class DetailPanel(VerticalScroll):
                         classes="detail-section",
                     )
                 )
-            elif "reader features" in err_msg and "not yet supported" in err_msg:
+            elif "reader features" in err_msg or "minimum reader version" in err_msg:
                 self.mount(
                     Static(
                         "⚠️ [yellow]This table uses advanced Delta features "
-                        "(e.g. deletion vectors) not fully supported by the local reader. "
+                        "not fully supported by the local reader. "
                         "Schema and history tabs may still work — "
                         "try the Data tab for a raw parquet preview.[/yellow]",
                         classes="detail-section",
@@ -528,8 +528,8 @@ class DetailPanel(VerticalScroll):
             await self._render_data_table(data_pane, sample)
         except Exception as e:
             err_msg = str(e)
-            # Handle unsupported reader features (e.g. deletionVectors)
-            if "reader features" in err_msg and "not yet supported" in err_msg:
+            # Handle unsupported reader features (e.g. deletionVectors, timestampNtz)
+            if "reader features" in err_msg or "minimum reader version" in err_msg:
                 logger.debug(
                     "Delta reader unsupported features, falling back to DFS parquet: %s", e
                 )
@@ -538,7 +538,7 @@ class DetailPanel(VerticalScroll):
                 await data_pane.mount(
                     Static(
                         "⚠️ [yellow]Table uses advanced Delta features "
-                        "(e.g. deletion vectors) not supported by the local reader. "
+                        "not supported by the local reader. "
                         "Falling back to raw parquet preview — "
                         "may include soft-deleted rows.[/yellow]",
                         classes="detail-section",
@@ -687,7 +687,11 @@ class DetailPanel(VerticalScroll):
             col_names = cdf_table.column_names
             tbl.add_columns(*col_names)
             for row_idx in range(min(cdf_table.num_rows, 100)):
-                row = [str(cdf_table.column(c)[row_idx]) for c in range(len(col_names))]
+                row = []
+                for c in range(len(col_names)):
+                    val = cdf_table.column(c)[row_idx]
+                    # arro3 Scalars need .as_py() to get the Python value
+                    row.append(str(val.as_py() if hasattr(val, "as_py") else val))
                 tbl.add_row(*row)
         except Exception as e:
             with contextlib.suppress(NoMatches):
