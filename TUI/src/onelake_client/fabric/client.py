@@ -31,10 +31,15 @@ class FabricClient:
             from onelake_client.environment import DEFAULT_ENVIRONMENT
 
             env = DEFAULT_ENVIRONMENT
+        self._env = env
         self._base_url = env.fabric_api_url
         self._client = client
         self._owns_client = client is None
         self._client_lock = asyncio.Lock()
+
+    def _on_auth_error(self) -> None:
+        """Invalidate cached Fabric token on 401 so next request re-acquires."""
+        self._auth.invalidate_token(self._env.fabric_scope)
 
     async def _get_client(self) -> httpx.AsyncClient:
         async with self._client_lock:
@@ -57,7 +62,12 @@ class FabricClient:
         headers = await self._auth.fabric_headers_async()
         workspaces: list[Workspace] = []
 
-        async for item in paginate_fabric(client, f"{self._base_url}/workspaces", headers=headers):
+        async for item in paginate_fabric(
+            client,
+            f"{self._base_url}/workspaces",
+            headers=headers,
+            on_auth_error=self._on_auth_error,
+        ):
             workspaces.append(Workspace.model_validate(item))
 
         return workspaces
@@ -88,6 +98,7 @@ class FabricClient:
             f"{self._base_url}/workspaces/{workspace_id}/items",
             headers=headers,
             params=params,
+            on_auth_error=self._on_auth_error,
         ):
             items.append(Item.model_validate(raw))
 
@@ -106,6 +117,7 @@ class FabricClient:
             client,
             f"{self._base_url}/workspaces/{workspace_id}/lakehouses",
             headers=headers,
+            on_auth_error=self._on_auth_error,
         ):
             lakehouses.append(Lakehouse.model_validate(raw))
 
@@ -125,5 +137,6 @@ class FabricClient:
             "GET",
             f"{self._base_url}/workspaces/{workspace_id}/lakehouses/{lakehouse_id}",
             headers=headers,
+            on_auth_error=self._on_auth_error,
         )
         return Lakehouse.model_validate(response.json())

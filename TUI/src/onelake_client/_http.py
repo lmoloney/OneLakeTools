@@ -161,6 +161,7 @@ async def paginate_fabric(
     params: dict[str, Any] | None = None,
     value_key: str = "value",
     max_items: int | None = None,
+    on_auth_error: Callable[[], None] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Paginate through Fabric REST API responses.
 
@@ -169,12 +170,16 @@ async def paginate_fabric(
 
     Args:
         max_items: Stop after yielding this many items. None means unlimited.
+        on_auth_error: Optional callback invoked on 401 before raising,
+            typically used to invalidate cached tokens.
     """
     params = dict(params or {})
     count = 0
 
     while True:
-        response = await request_with_retry(client, "GET", url, headers=headers, params=params)
+        response = await request_with_retry(
+            client, "GET", url, headers=headers, params=params, on_auth_error=on_auth_error
+        )
         try:
             data = response.json()
         except json.JSONDecodeError as e:
@@ -202,6 +207,7 @@ async def paginate_dfs(
     headers: dict[str, str],
     params: dict[str, Any] | None = None,
     max_items: int | None = None,
+    on_auth_error: Callable[[], None] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Paginate through DFS (ADLS Gen2) list responses.
 
@@ -211,12 +217,16 @@ async def paginate_dfs(
 
     Args:
         max_items: Stop after yielding this many items. None means unlimited.
+        on_auth_error: Optional callback invoked on 401 before raising,
+            typically used to invalidate cached tokens.
     """
     params = dict(params or {})
     count = 0
 
     while True:
-        response = await request_with_retry(client, "GET", url, headers=headers, params=params)
+        response = await request_with_retry(
+            client, "GET", url, headers=headers, params=params, on_auth_error=on_auth_error
+        )
         try:
             data = response.json()
         except json.JSONDecodeError as e:

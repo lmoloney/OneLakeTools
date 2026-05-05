@@ -234,3 +234,27 @@ async def test_list_items_missing_sql_endpoint(httpx_mock, auth):
     # The item should parse without error even without sqlEndpointProperties
 
     await client.close()
+
+
+async def test_401_invalidates_cached_token(httpx_mock, auth):
+    """Test that a 401 response triggers token invalidation via on_auth_error."""
+    from onelake_client.exceptions import AuthenticationError
+
+    httpx_mock.add_response(
+        url=f"{BASE_URL}/workspaces/ws-001/lakehouses/lh-001",
+        status_code=401,
+        text="token expired",
+    )
+
+    client = FabricClient(auth)
+    # Pre-populate the token cache
+    auth.get_token(PROD.fabric_scope)
+    assert PROD.fabric_scope in auth._token_cache
+
+    with pytest.raises(AuthenticationError):
+        await client.get_lakehouse("ws-001", "lh-001")
+
+    # Token should have been invalidated by on_auth_error callback
+    assert PROD.fabric_scope not in auth._token_cache
+
+    await client.close()

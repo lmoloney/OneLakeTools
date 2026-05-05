@@ -104,11 +104,16 @@ class DfsClient:
             from onelake_client.environment import DEFAULT_ENVIRONMENT
 
             env = DEFAULT_ENVIRONMENT
+        self._env = env
         self._dfs_host = env.dfs_host
         self._base_url = f"https://{self._dfs_host}"
         self._client = client
         self._owns_client = client is None
         self._client_lock = asyncio.Lock()
+
+    def _on_auth_error(self) -> None:
+        """Invalidate cached DFS token on 401 so next request re-acquires."""
+        self._auth.invalidate_token(self._env.storage_scope)
 
     @property
     def dfs_host(self) -> str:
@@ -164,7 +169,9 @@ class DfsClient:
         url = f"{self._base_url}/{workspace}"
         paths: list[PathInfo] = []
 
-        async for raw in paginate_dfs(client, url, headers=headers, params=params):
+        async for raw in paginate_dfs(
+            client, url, headers=headers, params=params, on_auth_error=self._on_auth_error
+        ):
             paths.append(_parse_path_info(raw))
 
         return paths
@@ -195,6 +202,7 @@ class DfsClient:
             "GET",
             f"{self._base_url}/{workspace}/{path}",
             headers=headers,
+            on_auth_error=self._on_auth_error,
         )
 
         if max_bytes is not None:
@@ -268,6 +276,7 @@ class DfsClient:
             "HEAD",
             f"{self._base_url}/{workspace}/{path}",
             headers=headers,
+            on_auth_error=self._on_auth_error,
         )
         return _parse_file_properties(response)
 
