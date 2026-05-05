@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from typing import TYPE_CHECKING
 
 from deltalake.exceptions import DeltaError
@@ -12,10 +13,20 @@ if TYPE_CHECKING:
     import pyarrow as pa
 
     from onelake_client.auth import OneLakeAuth
+    from onelake_client.fabric import FabricClient
 
 logger = logging.getLogger("onelake_client.tables.delta")
 
 _SUBPROCESS_TIMEOUT = 30  # seconds
+
+
+def _is_guid(value: str) -> bool:
+    """Check whether *value* looks like a UUID/GUID."""
+    try:
+        uuid.UUID(value)
+        return True
+    except ValueError:
+        return False
 
 
 def _build_table_uri(workspace: str, item_path: str, table_name: str, dfs_host: str) -> str:
@@ -23,7 +34,7 @@ def _build_table_uri(workspace: str, item_path: str, table_name: str, dfs_host: 
 
     Args:
         workspace: Workspace name or GUID.
-        item_path: Item path like "MyLakehouse.Lakehouse".
+        item_path: Item path like "MyLakehouse.Lakehouse" or a GUID.
         table_name: Table name under the Tables/ directory.
         dfs_host: DFS endpoint hostname (varies per ring).
 
@@ -300,20 +311,115 @@ class DeltaTableReader:
     isolate the main process from Rust panics that can occur with certain
     table features (e.g. deletion vectors, v2 checkpoints).
 
+    When a ``fabric_client`` is provided, friendly-name workspace/item
+    paths are automatically resolved to GUIDs before calling delta-rs.
+    This is required because delta-rs uses the Azure Blob API protocol,
+    which doesn't resolve OneLake friendly names for service principals.
+
     Usage:
         auth = OneLakeAuth()
         reader = DeltaTableReader(auth, dfs_host="onelake.dfs.fabric.microsoft.com")
         info = await reader.get_metadata("MyWorkspace", "MyLakehouse.Lakehouse", "customers")
     """
 
-    def __init__(self, auth: OneLakeAuth, dfs_host: str = "onelake.dfs.fabric.microsoft.com"):
+    def __init__(
+        self,
+        auth: OneLakeAuth,
+        dfs_host: str = "onelake.dfs.fabric.microsoft.com",
+        fabric_client: FabricClient | None = None,
+    ):
         self._auth = auth
         self._dfs_host = dfs_host
+        self._fabric = fabric_client
         self._isolate = True  # subprocess isolation for Rust panic safety
+        self._guid_cache: dict[tuple[str, str], tuple[str, str]] = {}
 
     def _get_storage_options(self) -> dict:
         """Get fresh storage options with a current token."""
         return self._auth.storage_options()
+
+    async def _resolve_uri(
+        self, workspace: str, item_path: str, table_name: str
+    ) -> str:
+        """Build an abfss URI, resolving friendly names to GUIDs when needed.
+
+        Delta-rs uses the Azure Blob API protocol, which doesn't resolve
+        OneLake friendly-name paths for service principal tokens.  When a
+        ``fabric_client`` is available and either the workspace or item is
+        a friendly name, this method resolves both to GUIDs via the Fabric
+        REST API before building the URI.
+        """
+        ws, item = workspace, item_path
+        needs_resolution = not _is_guid(workspace) or not _is_guid(item_path)
+
+        if needs_resolution and self._fabric is not None:
+            ws, item = await self._resolve_to_guids(workspace, item_path)
+        elif needs_resolution:
+            logger.debug(
+                "Friendly-name path without fabric_client — "
+                "delta-rs may fail for service-principal tokens"
+            )
+
+        return _build_table_uri(ws, item, table_name, self._dfs_host)
+
+    async def _resolve_to_guids(
+        self, workspace: str, item_path: str
+    ) -> tuple[str, str]:
+        """Resolve workspace name + item display path to GUIDs.
+
+        Results are cached for the lifetime of this reader instance.
+        """
+        cache_key = (workspace, item_path)
+        if cache_key in self._guid_cache:
+            return self._guid_cache[cache_key]
+
+        ws_id = workspace
+        if not _is_guid(workspace):
+            workspaces = await self._fabric.list_workspaces()
+            matches = [w for w in workspaces if w.display_name == workspace]
+            if len(matches) == 0:
+                raise DeltaError(
+                    f"Workspace '{workspace}' not found. "
+                    "Check the name or use the workspace GUID instead."
+                )
+            if len(matches) > 1:
+                ids = ", ".join(m.id for m in matches)
+                raise DeltaError(
+                    f"Multiple workspaces named '{workspace}' found ({ids}). "
+                    "Use the workspace GUID to disambiguate."
+                )
+            ws_id = matches[0].id
+            logger.debug("Resolved workspace '%s' → %s", workspace, ws_id)
+
+        item_id = item_path
+        if not _is_guid(item_path):
+            dot_idx = item_path.rfind(".")
+            if dot_idx <= 0:
+                raise DeltaError(
+                    f"Item path '{item_path}' must be in 'DisplayName.Type' "
+                    "format (e.g. 'MyLakehouse.Lakehouse') or a GUID."
+                )
+            item_name = item_path[:dot_idx]
+            item_type = item_path[dot_idx + 1:]
+            items = await self._fabric.list_items(ws_id, item_type=item_type)
+            matches = [i for i in items if i.display_name == item_name]
+            if len(matches) == 0:
+                raise DeltaError(
+                    f"Item '{item_name}' (type={item_type}) not found in "
+                    f"workspace '{workspace}'. Check the name or use the "
+                    "item GUID instead."
+                )
+            if len(matches) > 1:
+                ids = ", ".join(m.id for m in matches)
+                raise DeltaError(
+                    f"Multiple items named '{item_name}' (type={item_type}) "
+                    f"found ({ids}). Use the item GUID to disambiguate."
+                )
+            item_id = matches[0].id
+            logger.debug("Resolved item '%s' → %s", item_path, item_id)
+
+        self._guid_cache[cache_key] = (ws_id, item_id)
+        return ws_id, item_id
 
     def _load_table_sync(self, uri: str):
         """Synchronously load a DeltaTable (called via to_thread)."""
@@ -328,13 +434,13 @@ class DeltaTableReader:
 
         Args:
             workspace: Workspace name or GUID.
-            item_path: Item path like "MyLakehouse.Lakehouse".
+            item_path: Item path like "MyLakehouse.Lakehouse" or GUID.
             table_name: Table name under Tables/.
 
         Returns:
             DeltaTableInfo with schema, version, file count, size, etc.
         """
-        uri = _build_table_uri(workspace, item_path, table_name, self._dfs_host)
+        uri = await self._resolve_uri(workspace, item_path, table_name)
         logger.debug("Loading Delta table: %s", uri)
 
         if self._isolate:
@@ -461,7 +567,7 @@ class DeltaTableReader:
         Returns:
             pyarrow.Table with up to ``limit`` rows.
         """
-        uri = _build_table_uri(workspace, item_path, table_name, self._dfs_host)
+        uri = await self._resolve_uri(workspace, item_path, table_name)
         logger.debug("Reading sample (%d rows) from: %s", limit, uri)
         dt = await asyncio.to_thread(self._load_table_sync, uri)
 
@@ -521,7 +627,7 @@ class DeltaTableReader:
             pyarrow.Table with CDF records including _change_type,
             _commit_version, and _commit_timestamp columns.
         """
-        uri = _build_table_uri(workspace, item_path, table_name, self._dfs_host)
+        uri = await self._resolve_uri(workspace, item_path, table_name)
         logger.debug("Reading CDF from: %s (v%d→%s)", uri, starting_version, ending_version)
         dt = await asyncio.to_thread(self._load_table_sync, uri)
 
@@ -540,6 +646,6 @@ class DeltaTableReader:
         Returns:
             List of relative file paths (parquet files).
         """
-        uri = _build_table_uri(workspace, item_path, table_name, self._dfs_host)
+        uri = await self._resolve_uri(workspace, item_path, table_name)
         dt = await asyncio.to_thread(self._load_table_sync, uri)
         return dt.file_uris()

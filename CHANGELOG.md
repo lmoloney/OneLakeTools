@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Delta table metadata via friendly-name paths (workspace name + `DisplayName.Type`) now works with service principal auth by adding `use_fabric_endpoint` to delta-rs storage options — previously only GUID-based paths worked in CI (#32)
+- Delta table metadata via friendly-name paths (workspace name + `DisplayName.Type`) now works with service principal auth — `DeltaTableReader` auto-resolves friendly names to GUIDs via Fabric REST API before calling delta-rs, which uses the Azure Blob API protocol that doesn't resolve OneLake friendly names for SP tokens (#32)
 
 ### Added
 
