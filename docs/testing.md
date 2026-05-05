@@ -1,6 +1,6 @@
 # Testing Guide
 
-Comprehensive testing overview for OneLakeTools — 762 tests across 32 files.
+Comprehensive testing overview for OneLakeTools — 762 tests across 33 files.
 
 ## Test Architecture
 
@@ -18,10 +18,10 @@ OneLakeTools uses three test layers:
 
 | Category | Tests | Files |
 |----------|-------|-------|
-| Unit tests | 612 | 26 |
+| Unit tests | 612 | 25 |
 | Integration tests | 150 | 8 |
 | Snapshot tests | 8 | (included in unit) |
-| **Total** | **762** | **34** |
+| **Total** | **762** | **33** |
 
 ## Running Tests
 
