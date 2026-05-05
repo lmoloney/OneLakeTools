@@ -137,36 +137,46 @@ Integration tests are configured via a JSON manifest rather than individual envi
 
 | Item | Type | Contents |
 |------|------|----------|
-| `olt_lakehouse_simple` | Lakehouse | 10 Delta tables + 7 files |
-| `olt_lakehouse_schema` | Lakehouse | 4 tables across 2 schemas |
-| `olt-warehouse` | Warehouse | 2 tables + Iceberg |
-| 2 mirrored DBs | Mirrored DB | Not yet ready for testing |
+| `olt_lakehouse_simple` | Lakehouse | 15 Delta tables + 7 files |
+| `olt_lakehouse_schema` | Lakehouse | 4 tables across 2 schemas (dbo, analytics) |
+| `olt-warehouse` | Warehouse | 2 tables + Iceberg metadata |
+| `olt_mirror_standard` | MirroredDatabase | 3 tables in dbo (GenericMirror) |
+| `olt_mirror_cdf` | MirroredDatabase | 3 tables in hr (GenericMirror + CDF) |
 
 ### Delta Tables in `olt_lakehouse_simple`
 
 | Table | Features Covered |
 |-------|-----------------|
-| `basic_table` | Simple schema, single commit |
-| `multi_commit_table` | Multiple commits, version history |
-| `unicode_table` | Unicode column names and values |
-| `all_types_table` | All supported Delta data types |
-| `partitioned_table` | Partition columns |
-| `cdf_enabled_table` | Change Data Feed (CDF) |
-| `optimized_table` | OPTIMIZE + ZORDER |
-| `checkpoint_table` | Checkpoint files in delta log |
-| `timestamp_ntz_table` | TIMESTAMP_NTZ type |
-| `deletion_vector_table` | Deletion vectors (protocol feature) |
+| `customers` | Basic schema, single commit |
+| `orders` | Multi-commit (overwrite + append) |
+| `données_client` | Unicode table name and column names |
+| `all_data_types` | 14+ columns: int, long, float, double, decimal, string, boolean, date, timestamp, binary, struct, array, map |
+| `partitioned_sales` | Partitioned by sale_year + sale_month |
+| `cdf_tracking` | Change Data Feed enabled, INSERT→UPDATE→DELETE |
+| `optimized_events` | OPTIMIZE + ZORDER by event_type |
+| `high_version` | 16 commits, checkpoint at version 10 |
+| `timestamp_edge_cases` | TIMESTAMP + TIMESTAMP_NTZ + DATE |
+| `deletion_vector_demo` | Deletion vectors (protocol v3, readerFeatures) |
+| `schema_evolution_add` | ADD COLUMN across commits (3→4 columns) |
+| `schema_evolution_type` | Type widening property (typeWidening-preview feature) |
+| `column_mapping_id` | Column mapping mode=id, RENAME COLUMN |
+| `liquid_clustered` | CLUSTER BY (category, region) |
+| `generated_and_checks` | CHECK constraint (age > 0) |
 
 ### Integration Test Coverage
 
 - **Workspace/item listing** — enumerate workspaces, filter by name, validate item fields
-- **DFS browsing** — list paths, expand subdirectories, verify file/folder metadata
-- **File operations** — read file content, get file properties (size, timestamps, content type)
-- **Delta metadata** — schema, version, partition info, file listing for all 10 tables
+- **DFS browsing** — root dirs, table discovery, file existence, unicode/special paths, GUID + friendly-name modes
+- **File operations** — read CSV/JSON/Markdown/Parquet via DFS, get properties, error cases
+- **Delta metadata** — schema, version, partitions, file listing for all 15 tables
+- **Delta protocol** — reader/writer versions, features, total_rows, warnings
 - **Schema folders** — two-level `Tables/SCHEMA/table` layout in `olt_lakehouse_schema`
-- **Warehouse + Iceberg** — table listing and Iceberg metadata in `olt-warehouse`
-- **CDF read** — change data feed extraction via `read_cdf()`
-- **Deletion vectors** — verify tables with deletion vectors load correctly
+- **Warehouse + Iceberg** — Audit/ dir, Iceberg metadata reader (namespaces, tables, schema)
+- **Mirrored databases** — DFS structure, schema folders, Delta metadata for both mirrors
+- **CDF read** — change data feed extraction via `read_cdf()` with arro3 table handling
+- **Deletion vectors** — protocol v3, reader features, proactive warnings, schema access
+- **Schema evolution** — ADD COLUMN, column mapping mode=id with RENAME
+- **Clustering** — liquid clustering metadata and writer features
 
 ### DFS Addressing Modes
 

@@ -377,8 +377,8 @@ class DetailPanel(VerticalScroll):
                     Static(
                         "⚠️ [yellow]This table uses advanced Delta features "
                         "not fully supported by the local reader. "
-                        "Schema and history tabs may still work — "
-                        "try the Data tab for a raw parquet preview.[/yellow]",
+                        "Metadata could not be loaded — browse the table's "
+                        "files directly in the tree view.[/yellow]",
                         classes="detail-section",
                     )
                 )
