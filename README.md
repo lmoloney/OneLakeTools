@@ -77,6 +77,35 @@ uv run ruff check src/  # Lint
 uv run onelake-tui      # Launch the TUI
 ```
 
+## Testing
+
+**653 tests** across 32 test files — 545 unit tests + 108 integration tests, plus 8 snapshot regression tests ([syrupy](https://github.com/syrupy-project/syrupy)).
+
+### Test Layers
+
+1. **Unit tests** (`tests/`) — mock-based, no Fabric access needed
+   - Client library: auth, HTTP, DFS, Fabric API, Delta reader, Iceberg reader, models
+   - TUI widgets: smoke, navigation flow, file previews, table views, tree edge cases, path encoding
+   - Fixtures: Delta tables (5 committed fixtures), Parquet files (3 fixtures)
+   - Snapshots: Delta metadata + Parquet schema regression detection
+
+2. **Integration tests** (`tests/integration/`) — live Fabric workspace
+   - Config: `fabric-test-env.json` manifest (in-repo, auto-detected)
+   - Coverage: workspace/item listing, DFS browsing, file read/properties, Delta metadata for 10 tables, schema folders, warehouse + Iceberg, CDF read, deletion vectors
+   - Both GUID and friendly-name addressing modes tested
+
+### Running Tests
+
+```bash
+cd TUI
+uv sync --extra dev
+uv run pytest                          # Unit tests only (fast, ~60s)
+uv run pytest tests/integration/ -v    # Integration tests (needs az login, ~5min)
+uv run pytest --snapshot-update        # Update snapshots after fixture changes
+```
+
+See [`docs/testing.md`](docs/testing.md) for the full testing guide.
+
 ## Project Structure
 
 ```

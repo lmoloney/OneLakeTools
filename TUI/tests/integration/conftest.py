@@ -2,13 +2,11 @@
 
 These tests require real Azure/Fabric credentials and a live workspace.
 
-Required environment variables:
-    ONELAKE_TEST_WORKSPACE_ID — GUID of a Fabric workspace to test against
-
-Optional:
-    ONELAKE_TEST_LAKEHOUSE_ID — GUID of a lakehouse (for lakehouse-specific tests)
-    ONELAKE_TEST_LAKEHOUSE_NAME — Display name of the lakehouse
-    ONELAKE_TEST_TABLE_NAME — Name of a Delta table to read metadata from
+Configuration (in priority order):
+    1. Manifest file: ~/.config/onelaketools/fabric-test-env.json
+       (or path in ONELAKE_TEST_ENV_FILE env var)
+    2. Environment variables (CI fallback):
+       ONELAKE_TEST_WORKSPACE_ID, ONELAKE_TEST_LAKEHOUSE_ID, etc.
 
 Authentication:
     Local: `az login` (DefaultAzureCredential picks it up)
@@ -18,25 +16,74 @@ Authentication:
 
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 
 import pytest
 
 from onelake_client import OneLakeClient
 
-WORKSPACE_ID = os.environ.get("ONELAKE_TEST_WORKSPACE_ID")
-LAKEHOUSE_ID = os.environ.get("ONELAKE_TEST_LAKEHOUSE_ID")
-LAKEHOUSE_NAME = os.environ.get("ONELAKE_TEST_LAKEHOUSE_NAME")
-TABLE_NAME = os.environ.get("ONELAKE_TEST_TABLE_NAME")
+# ── Manifest loading ────────────────────────────────────────────────────
 
-# All integration tests get this marker + skip if no workspace configured
+_REPO_MANIFEST = Path(__file__).parent / "fabric-test-env.json"
+_USER_MANIFEST = Path.home() / ".config" / "onelaketools" / "fabric-test-env.json"
+
+
+def _load_manifest() -> dict | None:
+    """Load fabric-test-env.json — env override → in-repo → user home."""
+    env_path = os.environ.get("ONELAKE_TEST_ENV_FILE")
+    for candidate in [
+        Path(env_path) if env_path else None,
+        _REPO_MANIFEST,
+        _USER_MANIFEST,
+    ]:
+        if candidate and candidate.exists():
+            return json.loads(candidate.read_text())
+    return None
+
+
+_MANIFEST = _load_manifest()
+
+
+def _manifest_item(key: str) -> dict | None:
+    """Get an item from the manifest by its key (e.g. 'lakehouse_simple')."""
+    if _MANIFEST is None:
+        return None
+    return _MANIFEST.get("items", {}).get(key)
+
+
+# ── Resolve config: manifest first, env vars as fallback ────────────────
+
+WORKSPACE_ID = (
+    _MANIFEST["workspace"]["id"] if _MANIFEST else os.environ.get("ONELAKE_TEST_WORKSPACE_ID")
+)
+
+_lh_simple = _manifest_item("lakehouse_simple")
+LAKEHOUSE_ID = _lh_simple["id"] if _lh_simple else os.environ.get("ONELAKE_TEST_LAKEHOUSE_ID")
+LAKEHOUSE_NAME = _lh_simple["name"] if _lh_simple else os.environ.get("ONELAKE_TEST_LAKEHOUSE_NAME")
+
+# Default table for single-table tests
+TABLE_NAME = os.environ.get("ONELAKE_TEST_TABLE_NAME") or (
+    _lh_simple["expected_tables"][0] if _lh_simple and _lh_simple.get("expected_tables") else None
+)
+
+
+def _has_config() -> bool:
+    return WORKSPACE_ID is not None
+
+
+# All integration tests get this marker + skip if no config available
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
-        not WORKSPACE_ID,
-        reason="ONELAKE_TEST_WORKSPACE_ID not set — skipping integration tests",
+        not _has_config(),
+        reason="No manifest or ONELAKE_TEST_WORKSPACE_ID — skipping integration tests",
     ),
 ]
+
+
+# ── Credential ──────────────────────────────────────────────────────────
 
 
 def _create_credential():
@@ -53,6 +100,9 @@ def _create_credential():
     return DefaultAzureCredential()
 
 
+# ── Fixtures ────────────────────────────────────────────────────────────
+
+
 @pytest.fixture
 async def client():
     """Provide a live OneLakeClient with auto-detected credentials."""
@@ -67,21 +117,72 @@ def workspace_id():
 
 
 @pytest.fixture
+def workspace_name():
+    """Workspace display name (for friendly-name path tests)."""
+    if not _MANIFEST:
+        pytest.skip("No manifest — workspace_name requires manifest")
+    return _MANIFEST["workspace"]["name"]
+
+
+@pytest.fixture
+def manifest():
+    """Provide the full manifest dict (skip if not available)."""
+    if _MANIFEST is None:
+        pytest.skip("No fabric-test-env.json manifest found")
+    return _MANIFEST
+
+
+@pytest.fixture
 def lakehouse_id():
     if not LAKEHOUSE_ID:
-        pytest.skip("ONELAKE_TEST_LAKEHOUSE_ID not set")
+        pytest.skip("No lakehouse_simple in manifest or ONELAKE_TEST_LAKEHOUSE_ID not set")
     return LAKEHOUSE_ID
 
 
 @pytest.fixture
 def lakehouse_name():
     if not LAKEHOUSE_NAME:
-        pytest.skip("ONELAKE_TEST_LAKEHOUSE_NAME not set")
+        pytest.skip("No lakehouse_simple in manifest or ONELAKE_TEST_LAKEHOUSE_NAME not set")
     return LAKEHOUSE_NAME
+
+
+@pytest.fixture
+def lakehouse_display_path():
+    """Item path in DisplayName.Type format (e.g. 'olt_lakehouse_simple.Lakehouse')."""
+    if not LAKEHOUSE_NAME:
+        pytest.skip("No lakehouse_simple in manifest")
+    return f"{LAKEHOUSE_NAME}.Lakehouse"
 
 
 @pytest.fixture
 def table_name():
     if not TABLE_NAME:
-        pytest.skip("ONELAKE_TEST_TABLE_NAME not set")
+        pytest.skip("No table_name configured")
     return TABLE_NAME
+
+
+@pytest.fixture
+def lakehouse_simple_item():
+    """The lakehouse_simple manifest entry."""
+    item = _manifest_item("lakehouse_simple")
+    if not item:
+        pytest.skip("lakehouse_simple not in manifest")
+    return item
+
+
+@pytest.fixture
+def lakehouse_schema_item():
+    """The lakehouse_schema manifest entry."""
+    item = _manifest_item("lakehouse_schema")
+    if not item:
+        pytest.skip("lakehouse_schema not in manifest")
+    return item
+
+
+@pytest.fixture
+def warehouse_item():
+    """The warehouse manifest entry."""
+    item = _manifest_item("warehouse")
+    if not item:
+        pytest.skip("warehouse not in manifest")
+    return item

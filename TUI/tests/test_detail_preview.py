@@ -340,3 +340,398 @@ async def test_parquet_fallback_prioritizes_known_size_candidates():
             ),
         ]
     )
+
+
+# ── CSV edge cases ──────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_preview_csv_unicode():
+    """CSV with unicode content (French, CJK) renders without error."""
+    client = _make_mock_client()
+    csv_data = "nom,ville\nÉmilie,Zürich\n太郎,東京\n".encode()
+    client.dfs.read_file = AsyncMock(return_value=csv_data)
+    app = _DetailHarness(client)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        detail = app.query_one("#detail", DetailPanel)
+        detail._workspace_name = "TestWS"
+        detail._item_name = "TestItem"
+
+        file_node = FileNode(workspace="ws", path="item/Files/intl.csv", size=len(csv_data))
+        detail.preview_file(file_node)
+
+        await pilot.pause()
+        await asyncio.sleep(0.3)
+        await pilot.pause()
+
+        datatables = detail.query(DataTable)
+        assert len(datatables) > 0, "Expected DataTable for unicode CSV"
+        assert datatables[0].columns, "Expected DataTable to have columns"
+
+
+@pytest.mark.asyncio
+async def test_preview_csv_empty_cells_and_quoted_commas():
+    """CSV with empty cells and quoted commas parses correctly."""
+    client = _make_mock_client()
+    csv_data = b'col1,col2,col3\n"hello, world",,"third"\n'
+    client.dfs.read_file = AsyncMock(return_value=csv_data)
+    app = _DetailHarness(client)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        detail = app.query_one("#detail", DetailPanel)
+        detail._workspace_name = "TestWS"
+        detail._item_name = "TestItem"
+
+        file_node = FileNode(workspace="ws", path="item/Files/quoted.csv", size=len(csv_data))
+        detail.preview_file(file_node)
+
+        await pilot.pause()
+        await asyncio.sleep(0.3)
+        await pilot.pause()
+
+        datatables = detail.query(DataTable)
+        assert len(datatables) > 0, "Expected DataTable for CSV with quoted commas"
+        table = datatables[0]
+        assert len(table.columns) == 3
+
+
+@pytest.mark.asyncio
+async def test_preview_csv_header_only():
+    """CSV with only a header row (no data rows) renders without error."""
+    client = _make_mock_client()
+    csv_data = b"id,name,value\n"
+    client.dfs.read_file = AsyncMock(return_value=csv_data)
+    app = _DetailHarness(client)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        detail = app.query_one("#detail", DetailPanel)
+        detail._workspace_name = "TestWS"
+        detail._item_name = "TestItem"
+
+        file_node = FileNode(workspace="ws", path="item/Files/empty.csv", size=len(csv_data))
+        detail.preview_file(file_node)
+
+        await pilot.pause()
+        await asyncio.sleep(0.3)
+        await pilot.pause()
+
+        datatables = detail.query(DataTable)
+        assert len(datatables) > 0, "Expected DataTable even with header-only CSV"
+        assert len(datatables[0].columns) == 3
+
+
+@pytest.mark.asyncio
+async def test_preview_csv_large():
+    """CSV with 100+ rows renders without crash (capped at 100 data rows)."""
+    client = _make_mock_client()
+    header = "idx,value\n"
+    rows = "".join(f"{i},{i * 10}\n" for i in range(150))
+    csv_data = (header + rows).encode("utf-8")
+    client.dfs.read_file = AsyncMock(return_value=csv_data)
+    app = _DetailHarness(client)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        detail = app.query_one("#detail", DetailPanel)
+        detail._workspace_name = "TestWS"
+        detail._item_name = "TestItem"
+
+        file_node = FileNode(workspace="ws", path="item/Files/big.csv", size=len(csv_data))
+        detail.preview_file(file_node)
+
+        await pilot.pause()
+        await asyncio.sleep(0.3)
+        await pilot.pause()
+
+        datatables = detail.query(DataTable)
+        assert len(datatables) > 0, "Expected DataTable for large CSV"
+        # Implementation caps at 100 data rows
+        assert datatables[0].row_count <= 100
+
+
+# ── JSON edge cases ─────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_preview_json_nested():
+    """Nested JSON with arrays and objects renders as TextArea."""
+    client = _make_mock_client()
+    json_bytes = b'{"users":[{"name":"Alice","roles":["admin"]},{"name":"Bob","roles":[]}]}'
+    client.dfs.read_file = AsyncMock(return_value=json_bytes)
+    app = _DetailHarness(client)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        detail = app.query_one("#detail", DetailPanel)
+        detail._workspace_name = "TestWS"
+        detail._item_name = "TestItem"
+
+        file_node = FileNode(workspace="ws", path="item/Files/nested.json", size=len(json_bytes))
+        detail.preview_file(file_node)
+
+        await pilot.pause()
+        await asyncio.sleep(0.3)
+        await pilot.pause()
+
+        textareas = detail.query(TextArea)
+        assert len(textareas) > 0, "Expected TextArea for nested JSON"
+
+
+@pytest.mark.asyncio
+async def test_preview_json_unicode_keys_values():
+    """JSON with unicode keys and values renders correctly."""
+    client = _make_mock_client()
+    json_bytes = '{"clé":"valeur","名前":"太郎"}'.encode()
+    client.dfs.read_file = AsyncMock(return_value=json_bytes)
+    app = _DetailHarness(client)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        detail = app.query_one("#detail", DetailPanel)
+        detail._workspace_name = "TestWS"
+        detail._item_name = "TestItem"
+
+        file_node = FileNode(workspace="ws", path="item/Files/uni.json", size=len(json_bytes))
+        detail.preview_file(file_node)
+
+        await pilot.pause()
+        await asyncio.sleep(0.3)
+        await pilot.pause()
+
+        textareas = detail.query(TextArea)
+        assert len(textareas) > 0, "Expected TextArea for unicode JSON"
+        # Verify unicode preserved (ensure_ascii=False in implementation)
+        content = textareas[0].text
+        assert "太郎" in content
+
+
+@pytest.mark.asyncio
+async def test_preview_json_already_pretty():
+    """Pretty-printed JSON (already formatted) renders without error."""
+    client = _make_mock_client()
+    pretty = b'{\n  "a": 1,\n  "b": {\n    "c": 2\n  }\n}'
+    client.dfs.read_file = AsyncMock(return_value=pretty)
+    app = _DetailHarness(client)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        detail = app.query_one("#detail", DetailPanel)
+        detail._workspace_name = "TestWS"
+        detail._item_name = "TestItem"
+
+        file_node = FileNode(workspace="ws", path="item/Files/fmt.json", size=len(pretty))
+        detail.preview_file(file_node)
+
+        await pilot.pause()
+        await asyncio.sleep(0.3)
+        await pilot.pause()
+
+        textareas = detail.query(TextArea)
+        assert len(textareas) > 0, "Expected TextArea for pretty JSON"
+
+
+@pytest.mark.asyncio
+async def test_preview_json_invalid_bytes():
+    """Invalid JSON bytes don't crash — rendered as raw text in TextArea."""
+    client = _make_mock_client()
+    bad_json = b"{not valid json at all!!!"
+    client.dfs.read_file = AsyncMock(return_value=bad_json)
+    app = _DetailHarness(client)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        detail = app.query_one("#detail", DetailPanel)
+        detail._workspace_name = "TestWS"
+        detail._item_name = "TestItem"
+
+        file_node = FileNode(workspace="ws", path="item/Files/bad.json", size=len(bad_json))
+        detail.preview_file(file_node)
+
+        await pilot.pause()
+        await asyncio.sleep(0.3)
+        await pilot.pause()
+
+        # Should still render a TextArea (falls through NDJSON path, keeps raw text)
+        textareas = detail.query(TextArea)
+        assert len(textareas) > 0, "Expected TextArea even for invalid JSON"
+
+
+# ── NDJSON edge cases ───────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_preview_ndjson_mixed_size_lines():
+    """NDJSON with mixed-size lines (small and large objects) renders."""
+    client = _make_mock_client()
+    small = '{"a":1}'
+    large = '{"data":' + str(list(range(50))) + "}"
+    ndjson_data = f"{small}\n{large}\n".encode()
+    client.dfs.read_file = AsyncMock(return_value=ndjson_data)
+    app = _DetailHarness(client)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        detail = app.query_one("#detail", DetailPanel)
+        detail._workspace_name = "TestWS"
+        detail._item_name = "TestItem"
+
+        file_node = FileNode(workspace="ws", path="item/Files/mixed.json", size=len(ndjson_data))
+        detail.preview_file(file_node)
+
+        await pilot.pause()
+        await asyncio.sleep(0.3)
+        await pilot.pause()
+
+        textareas = detail.query(TextArea)
+        assert len(textareas) > 0, "Expected TextArea for mixed-size NDJSON"
+
+
+@pytest.mark.asyncio
+async def test_preview_ndjson_first_valid_second_invalid():
+    """NDJSON where first line is valid but second is invalid renders both."""
+    client = _make_mock_client()
+    ndjson_data = b'{"valid":true}\n{broken json\n'
+    client.dfs.read_file = AsyncMock(return_value=ndjson_data)
+    app = _DetailHarness(client)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        detail = app.query_one("#detail", DetailPanel)
+        detail._workspace_name = "TestWS"
+        detail._item_name = "TestItem"
+
+        file_node = FileNode(workspace="ws", path="item/Files/partial.json", size=len(ndjson_data))
+        detail.preview_file(file_node)
+
+        await pilot.pause()
+        await asyncio.sleep(0.3)
+        await pilot.pause()
+
+        textareas = detail.query(TextArea)
+        assert len(textareas) > 0, "Expected TextArea for NDJSON with invalid line"
+        # Valid line should be pretty-printed; invalid kept as-is
+        content = textareas[0].text
+        assert "valid" in content
+        assert "{broken json" in content
+
+
+# ── Markdown edge cases ─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_preview_markdown_rich_content():
+    """Markdown with headings, code blocks, tables, and links renders."""
+    client = _make_mock_client()
+    md = (
+        b"# Title\n\n"
+        b"## Subtitle\n\n"
+        b"Some text with [a link](https://example.com).\n\n"
+        b"```python\nprint('hello')\n```\n\n"
+        b"| Col A | Col B |\n|-------|-------|\n| 1     | 2     |\n"
+    )
+    client.dfs.read_file = AsyncMock(return_value=md)
+    app = _DetailHarness(client)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        detail = app.query_one("#detail", DetailPanel)
+        detail._workspace_name = "TestWS"
+        detail._item_name = "TestItem"
+
+        file_node = FileNode(workspace="ws", path="item/Files/rich.md", size=len(md))
+        detail.preview_file(file_node)
+
+        await pilot.pause()
+        await asyncio.sleep(0.3)
+        await pilot.pause()
+
+        markdowns = detail.query(Markdown)
+        assert len(markdowns) > 0, "Expected Markdown widget for rich content"
+
+
+@pytest.mark.asyncio
+async def test_preview_markdown_with_html():
+    """Markdown with embedded HTML tags renders without error."""
+    client = _make_mock_client()
+    md = b"# Title\n\n<div>HTML block</div>\n\n<em>emphasis</em> and **bold**\n"
+    client.dfs.read_file = AsyncMock(return_value=md)
+    app = _DetailHarness(client)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        detail = app.query_one("#detail", DetailPanel)
+        detail._workspace_name = "TestWS"
+        detail._item_name = "TestItem"
+
+        file_node = FileNode(workspace="ws", path="item/Files/html.md", size=len(md))
+        detail.preview_file(file_node)
+
+        await pilot.pause()
+        await asyncio.sleep(0.3)
+        await pilot.pause()
+
+        markdowns = detail.query(Markdown)
+        assert len(markdowns) > 0, "Expected Markdown widget for HTML-embedded content"
+
+
+# ── Binary / hex dump edge cases ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_preview_binary_null_and_ff_bytes():
+    """Pure binary data with null bytes and 0xFF renders as hex dump."""
+    client = _make_mock_client()
+    binary_data = bytes(range(256))  # 0x00 through 0xFF
+    client.dfs.read_file = AsyncMock(return_value=binary_data)
+    app = _DetailHarness(client)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        detail = app.query_one("#detail", DetailPanel)
+        detail._workspace_name = "TestWS"
+        detail._item_name = "TestItem"
+
+        file_node = FileNode(workspace="ws", path="item/Files/full.bin", size=len(binary_data))
+        detail.preview_file(file_node)
+
+        await pilot.pause()
+        await asyncio.sleep(0.3)
+        await pilot.pause()
+
+        statics = detail.query(Static)
+        static_texts = [_get_widget_text(w) for w in statics]
+        assert any("Binary file" in txt or "00000000" in txt for txt in static_texts), (
+            f"Expected hex dump for pure binary. Found: {static_texts}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_preview_binary_small_file():
+    """Small binary file (< 16 bytes) renders as hex dump with single line."""
+    client = _make_mock_client()
+    binary_data = b"\x00\xff\x0a\x0d"
+    client.dfs.read_file = AsyncMock(return_value=binary_data)
+    app = _DetailHarness(client)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        detail = app.query_one("#detail", DetailPanel)
+        detail._workspace_name = "TestWS"
+        detail._item_name = "TestItem"
+
+        file_node = FileNode(workspace="ws", path="item/Files/tiny.bin", size=len(binary_data))
+        detail.preview_file(file_node)
+
+        await pilot.pause()
+        await asyncio.sleep(0.3)
+        await pilot.pause()
+
+        statics = detail.query(Static)
+        static_texts = [_get_widget_text(w) for w in statics]
+        assert any("Binary file" in txt or "00000000" in txt for txt in static_texts), (
+            f"Expected hex dump for small binary. Found: {static_texts}"
+        )

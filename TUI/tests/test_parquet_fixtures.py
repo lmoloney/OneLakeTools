@@ -121,6 +121,23 @@ class TestNestedStructs:
         assert table.column("tags")[0].as_py() == ["admin", "user"]
         assert table.column("tags")[1].as_py() == ["user"]
 
+    def test_map_values_accessible(self, table: pa.Table) -> None:
+        """Map column values are accessible as key-value pair lists."""
+        meta_col = table.column("metadata")
+        row0 = meta_col[0].as_py()
+        assert isinstance(row0, list), "Map values should be returned as list of tuples"
+        # Each entry is a (key, value) tuple
+        keys = [k for k, _v in row0]
+        assert len(keys) > 0, "Expected at least one key-value pair in map"
+
+    def test_null_handling_in_nested_types(self, table: pa.Table) -> None:
+        """Nested columns should be readable even if some rows have None values."""
+        for col_name in ["address", "tags", "metadata"]:
+            col = table.column(col_name)
+            # Verify we can iterate all values without error
+            values = col.to_pylist()
+            assert len(values) == table.num_rows
+
 
 # ── dictionary_encoded.parquet ──────────────────────────────────────────
 
@@ -193,3 +210,41 @@ class TestCoerceTimestamps:
         assert coerced.schema.field("int_col").type == pa.int64()
         assert coerced.schema.field("string_col").type == pa.string()
         assert coerced.column("int_col").to_pylist() == table.column("int_col").to_pylist()
+
+    def test_all_non_timestamp_values_unchanged(self, table: pa.Table) -> None:
+        """Every non-timestamp column value must be identical after coercion."""
+        coerced = coerce_timestamps(table)
+        non_ts_cols = [
+            name
+            for name in table.schema.names
+            if not pa.types.is_timestamp(table.schema.field(name).type)
+        ]
+        for col_name in non_ts_cols:
+            original = table.column(col_name).to_pylist()
+            after = coerced.column(col_name).to_pylist()
+            assert after == original, f"Column {col_name!r} values changed after coerce"
+
+    def test_coerced_timestamp_values_in_range(self, table: pa.Table) -> None:
+        """Coerced timestamp values should be within a sensible date range."""
+        coerced = coerce_timestamps(table)
+        for name in coerced.schema.names:
+            if not pa.types.is_timestamp(coerced.schema.field(name).type):
+                continue
+            for val in coerced.column(name).to_pylist():
+                if val is None:
+                    continue
+                # Strip timezone for comparison
+                naive = val.replace(tzinfo=None) if val.tzinfo else val
+                assert datetime(1900, 1, 1) <= naive <= datetime(2200, 1, 1), (
+                    f"Column {name!r} has timestamp {val} outside expected range"
+                )
+
+    def test_idempotency(self, table: pa.Table) -> None:
+        """coerce_timestamps(coerce_timestamps(table)) should equal single coercion."""
+        once = coerce_timestamps(table)
+        twice = coerce_timestamps(once)
+        assert once.schema.equals(twice.schema)
+        for col_name in once.schema.names:
+            assert once.column(col_name).to_pylist() == twice.column(col_name).to_pylist(), (
+                f"Column {col_name!r} differs between single and double coercion"
+            )

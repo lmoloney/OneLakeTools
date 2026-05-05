@@ -24,6 +24,12 @@ class DeltaTableInfo(BaseModel):
     partition_columns: list[str] = []
     properties: dict[str, str] = {}
     description: str | None = None
+    reader_version: int = 1
+    writer_version: int = 2
+    reader_features: list[str] = []
+    writer_features: list[str] = []
+    total_rows: int | None = None
+    warnings: list[str] = []
 
 
 class IcebergTableInfo(BaseModel):

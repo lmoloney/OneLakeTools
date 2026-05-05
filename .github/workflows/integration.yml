@@ -16,7 +16,8 @@ jobs:
     name: Live Fabric Tests
     runs-on: ubuntu-latest
     environment: fabric-test
-    # Don't fail the workflow on integration test flakiness
+    # Don't fail the overall workflow on integration test flakiness,
+    # but the job itself still reports failure for visibility.
     continue-on-error: true
 
     steps:

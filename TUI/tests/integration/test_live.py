@@ -1,27 +1,15 @@
 """Live integration tests against a real Fabric workspace.
 
-Run locally:
-    ONELAKE_TEST_WORKSPACE_ID=<guid> uv run pytest tests/integration/ -v
-
-With lakehouse tests:
-    ONELAKE_TEST_WORKSPACE_ID=<guid> \\
-    ONELAKE_TEST_LAKEHOUSE_ID=<guid> \\
-    ONELAKE_TEST_LAKEHOUSE_NAME=<name> \\
-    ONELAKE_TEST_TABLE_NAME=<table> \\
+Run locally (manifest auto-detected from ~/.config/onelaketools/fabric-test-env.json):
     uv run pytest tests/integration/ -v
+
+Or with explicit env vars (CI):
+    ONELAKE_TEST_WORKSPACE_ID=<guid> uv run pytest tests/integration/ -v
 """
 
 from __future__ import annotations
 
-import os
-
 import pytest
-
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("ONELAKE_TEST_WORKSPACE_ID"),
-    reason="ONELAKE_TEST_WORKSPACE_ID not set — skipping integration tests",
-)
-
 
 # ── Workspace & Item listing ────────────────────────────────────────────
 
@@ -83,44 +71,110 @@ async def test_lakehouse_properties(client, workspace_id, lakehouse_id):
     assert lh.properties.onelake_files_path
 
 
-# ── DFS file browsing ───────────────────────────────────────────────────
+# ── DFS file browsing (GUID paths) ──────────────────────────────────────
 
 
-async def test_list_dfs_root_paths(client, workspace_id, lakehouse_name):
-    """Browse files at the root of a lakehouse via DFS."""
-    paths = await client.dfs.list_paths(workspace_id, f"{lakehouse_name}.Lakehouse")
+async def test_dfs_root_guid_path(client, workspace_id, lakehouse_id):
+    """Browse lakehouse root via GUID workspace + GUID item."""
+    paths = await client.dfs.list_paths(workspace_id, lakehouse_id)
     assert isinstance(paths, list)
-    # Lakehouses typically have Tables/ and Files/ at minimum
     dir_names = {p.name.split("/")[-1] for p in paths if p.is_directory}
     assert len(dir_names) > 0, "Expected at least one directory at lakehouse root"
 
 
-async def test_list_dfs_subdirectory(client, workspace_id, lakehouse_name):
-    """Browse a subdirectory (Tables/) in a lakehouse."""
-    root_paths = await client.dfs.list_paths(workspace_id, f"{lakehouse_name}.Lakehouse")
-    # Find the first directory to descend into
+async def test_dfs_subdirectory_guid_path(client, workspace_id, lakehouse_id):
+    """Browse a subdirectory via GUID paths."""
+    root_paths = await client.dfs.list_paths(workspace_id, lakehouse_id)
     dirs = [p for p in root_paths if p.is_directory]
     if not dirs:
         pytest.skip("No directories in lakehouse root")
-    first_dir = dirs[0]
-    sub_paths = await client.dfs.list_paths(workspace_id, first_dir.name)
+    sub_paths = await client.dfs.list_paths(workspace_id, dirs[0].name)
     assert isinstance(sub_paths, list)
 
 
-# ── Delta table metadata ────────────────────────────────────────────────
+# ── DFS file browsing (friendly-name paths) ─────────────────────────────
 
 
-async def test_delta_table_metadata(client, workspace_id, lakehouse_name, table_name):
-    """Read Delta table metadata from a live table."""
-    info = await client.delta.get_metadata(workspace_id, f"{lakehouse_name}.Lakehouse", table_name)
+async def test_dfs_root_friendly_path(client, workspace_name, lakehouse_display_path):
+    """Browse lakehouse root via workspace name + DisplayName.Type item path."""
+    paths = await client.dfs.list_paths(workspace_name, lakehouse_display_path)
+    assert isinstance(paths, list)
+    dir_names = {p.name.split("/")[-1] for p in paths if p.is_directory}
+    assert len(dir_names) > 0, "Expected at least one directory at lakehouse root"
+
+
+async def test_dfs_subdirectory_friendly_path(client, workspace_name, lakehouse_display_path):
+    """Browse a subdirectory via friendly-name paths."""
+    root_paths = await client.dfs.list_paths(workspace_name, lakehouse_display_path)
+    dirs = [p for p in root_paths if p.is_directory]
+    if not dirs:
+        pytest.skip("No directories in lakehouse root")
+    sub_paths = await client.dfs.list_paths(workspace_name, dirs[0].name)
+    assert isinstance(sub_paths, list)
+
+
+async def test_dfs_guid_and_friendly_return_same_dirs(
+    client, workspace_id, lakehouse_id, workspace_name, lakehouse_display_path
+):
+    """GUID and friendly-name paths should return the same root directories."""
+    guid_paths = await client.dfs.list_paths(workspace_id, lakehouse_id)
+    named_paths = await client.dfs.list_paths(workspace_name, lakehouse_display_path)
+
+    guid_dirs = {p.name.split("/")[-1] for p in guid_paths if p.is_directory}
+    named_dirs = {p.name.split("/")[-1] for p in named_paths if p.is_directory}
+    assert guid_dirs == named_dirs, f"Mismatch: GUID={guid_dirs}, named={named_dirs}"
+
+
+# ── Delta table metadata (GUID paths) ──────────────────────────────────
+
+
+async def test_delta_metadata_guid_path(client, workspace_id, lakehouse_id, table_name):
+    """Read Delta table metadata via GUID workspace + GUID item."""
+    info = await client.delta.get_metadata(workspace_id, lakehouse_id, table_name)
     assert info.version >= 0
     assert len(info.schema_) > 0
     assert info.num_files >= 0
 
 
-async def test_delta_table_has_columns(client, workspace_id, lakehouse_name, table_name):
-    """Delta table schema should have at least one column with name and type."""
-    info = await client.delta.get_metadata(workspace_id, f"{lakehouse_name}.Lakehouse", table_name)
+async def test_delta_columns_guid_path(client, workspace_id, lakehouse_id, table_name):
+    """Delta table schema columns have name and type (GUID path)."""
+    info = await client.delta.get_metadata(workspace_id, lakehouse_id, table_name)
     for col in info.schema_:
         assert col.name, "Column has empty name"
         assert col.type, "Column has empty type"
+
+
+# ── Delta table metadata (friendly-name paths) ─────────────────────────
+
+
+async def test_delta_metadata_friendly_path(
+    client, workspace_name, lakehouse_display_path, table_name
+):
+    """Read Delta table metadata via workspace name + DisplayName.Type."""
+    info = await client.delta.get_metadata(workspace_name, lakehouse_display_path, table_name)
+    assert info.version >= 0
+    assert len(info.schema_) > 0
+    assert info.num_files >= 0
+
+
+async def test_delta_columns_friendly_path(
+    client, workspace_name, lakehouse_display_path, table_name
+):
+    """Delta table schema columns have name and type (friendly path)."""
+    info = await client.delta.get_metadata(workspace_name, lakehouse_display_path, table_name)
+    for col in info.schema_:
+        assert col.name, "Column has empty name"
+        assert col.type, "Column has empty type"
+
+
+async def test_delta_guid_and_friendly_return_same_schema(
+    client, workspace_id, lakehouse_id, workspace_name, lakehouse_display_path, table_name
+):
+    """GUID and friendly-name paths should return identical schema."""
+    guid_info = await client.delta.get_metadata(workspace_id, lakehouse_id, table_name)
+    named_info = await client.delta.get_metadata(workspace_name, lakehouse_display_path, table_name)
+
+    guid_cols = [(c.name, c.type) for c in guid_info.schema_]
+    named_cols = [(c.name, c.type) for c in named_info.schema_]
+    assert guid_cols == named_cols
+    assert guid_info.version == named_info.version

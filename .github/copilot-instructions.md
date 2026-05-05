@@ -111,8 +111,20 @@ TUI/src/
 
 ### Testing
 - Unit tests mock httpx responses via `pytest-httpx`
-- Integration tests in `tests/integration/` require `az login` and real Fabric access
+- Integration tests in `tests/integration/` require `az login` and a populated Fabric workspace
 - Marker `@pytest.mark.integration` for integration tests
+- Integration test environment is configured via `fabric-test-env.json` manifest
+  - Search order: `ONELAKE_TEST_ENV_FILE` env var → `tests/integration/fabric-test-env.json` → `~/.config/onelaketools/fabric-test-env.json` → individual env vars
+- DFS tests must use matching address modes: GUID+GUID or name+name.Type — cannot mix workspace GUID with friendly-name item path (or vice versa)
+- `read_cdf()` returns `arro3.core.Table` (not `pyarrow.Table`) in deltalake >= 1.0
+
+```bash
+cd TUI
+uv sync --extra dev
+uv run pytest                          # Unit tests only (fast, ~60s)
+uv run pytest tests/integration/ -v    # Integration tests (needs az login, ~5min)
+uv run pytest --snapshot-update        # Update snapshots after fixture changes
+```
 
 ## How to Add Things
 

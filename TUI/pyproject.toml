@@ -44,6 +44,7 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "pytest-httpx>=0.34",
+    "pytest-timeout>=2.3",
     "syrupy>=4.0",
     "ruff>=0.8",
 ]
