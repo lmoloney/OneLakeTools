@@ -53,10 +53,13 @@ class FabricClient:
             await self._client.aclose()
             self._client = None
 
-    async def list_workspaces(self) -> list[Workspace]:
+    async def list_workspaces(self, *, max_items: int | None = None) -> list[Workspace]:
         """List all accessible workspaces.
 
         GET /v1/workspaces — paginated via continuationToken.
+
+        Args:
+            max_items: Stop after this many workspaces. None means unlimited.
         """
         client = await self._get_client()
         headers = await self._auth.fabric_headers_async()
@@ -67,6 +70,7 @@ class FabricClient:
             f"{self._base_url}/workspaces",
             headers=headers,
             on_auth_error=self._on_auth_error,
+            max_items=max_items,
         ):
             workspaces.append(Workspace.model_validate(item))
 
@@ -77,6 +81,7 @@ class FabricClient:
         workspace_id: str,
         *,
         item_type: str | None = None,
+        max_items: int | None = None,
     ) -> list[Item]:
         """List items in a workspace, optionally filtered by type.
 
@@ -85,6 +90,7 @@ class FabricClient:
         Args:
             workspace_id: The workspace GUID.
             item_type: Optional filter — e.g., "Lakehouse", "Warehouse", "Notebook".
+            max_items: Stop after this many items. None means unlimited.
         """
         client = await self._get_client()
         headers = await self._auth.fabric_headers_async()
@@ -99,6 +105,7 @@ class FabricClient:
             headers=headers,
             params=params,
             on_auth_error=self._on_auth_error,
+            max_items=max_items,
         ):
             items.append(Item.model_validate(raw))
 
