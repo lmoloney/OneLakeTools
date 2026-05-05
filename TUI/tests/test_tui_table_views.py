@@ -589,3 +589,148 @@ class TestTableWithColumnMetadata:
             )
         finally:
             await ctx.__aexit__(None, None, None)
+
+
+# ── Regression tests (bugs found during manual testing) ─────────────
+
+
+class TestCdfRendersValues:
+    """Regression: CDF tab was showing arro3 Scalar type names instead of values.
+
+    read_cdf() returns arro3.core.Table. Indexing columns gives Scalar objects
+    where str() shows 'arro3.core.Scalar<Int64>' instead of the actual value.
+    The fix calls .as_py() before str().
+    """
+
+    @pytest.mark.asyncio
+    async def test_cdf_cells_contain_values_not_types(self):
+        """CDF DataTable cells should contain actual values, not arro3 Scalar type names."""
+        client = _make_mock_client()
+        info = DeltaTableInfo(
+            name="cdf_table",
+            schema_=[Column(name="id", type="long"), Column(name="value", type="string")],
+            version=3,
+            num_files=1,
+            size_bytes=1024,
+            properties={"delta.enableChangeDataFeed": "true"},
+        )
+
+        # Create a mock arro3-like table that returns Scalar-like objects
+        class _MockScalar:
+            """Simulates arro3.core.Scalar — str() shows type, as_py() shows value."""
+
+            def __init__(self, value, type_name):
+                self._value = value
+                self._type_name = type_name
+
+            def __str__(self):
+                return f"arro3.core.Scalar<{self._type_name}>"
+
+            def as_py(self):
+                return self._value
+
+        class _MockColumn:
+            def __init__(self, values, type_name):
+                self._values = values
+                self._type_name = type_name
+
+            def __getitem__(self, idx):
+                return _MockScalar(self._values[idx], self._type_name)
+
+        class _MockCdfTable:
+            column_names = ["id", "value", "_change_type"]
+            num_rows = 2
+
+            def column(self, idx):
+                cols = [
+                    _MockColumn([1, 2], "Int64"),
+                    _MockColumn(["hello", "world"], "Utf8View"),
+                    _MockColumn(["insert", "insert"], "Utf8View"),
+                ]
+                return cols[idx]
+
+        client.delta.get_metadata = AsyncMock(return_value=info)
+        client.delta.read_cdf = AsyncMock(return_value=_MockCdfTable())
+
+        app = _DetailHarness(client)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            detail = app.query_one("#detail", DetailPanel)
+            detail._workspace_name = "TestWS"
+            detail._item_name = "TestItem"
+
+            node = TableNode(workspace="ws", item_path="item", table_name="cdf_table")
+            detail.update_for_node(node)
+
+            await pilot.pause()
+            await asyncio.sleep(0.5)
+            await pilot.pause()
+            await pilot.pause()
+
+            # Click the CDF load button
+            from textual.widgets import Button
+
+            try:
+                btn = detail.query_one("#load-cdf-preview", Button)
+                btn.press()
+            except Exception:
+                pass  # Button may not exist if CDF auto-loaded
+
+            await pilot.pause()
+            await asyncio.sleep(0.5)
+            await pilot.pause()
+
+            # Check that no cell contains "arro3.core.Scalar"
+            data_tables = detail.query(DataTable)
+            for dt in data_tables:
+                for row_key in dt.rows:
+                    row_data = dt.get_row(row_key)
+                    for cell in row_data:
+                        cell_str = str(cell)
+                        assert "arro3.core.Scalar" not in cell_str, (
+                            f"CDF cell contains type name instead of value: {cell_str}"
+                        )
+
+
+class TestMinReaderVersionFallback:
+    """Regression: 'minimum reader version' errors were not caught by the fallback handler.
+
+    column_mapping_id tables produce: 'The table's minimum reader version is 2
+    but deltalake only supports version 1 or 3 with these reader features:
+    {'timestampNtz'}' — this was not matched by the old pattern that only
+    checked for 'reader features' AND 'not yet supported'.
+    """
+
+    @pytest.mark.asyncio
+    async def test_minimum_reader_version_shows_fallback_warning(self):
+        """Error about minimum reader version should trigger fallback, not crash."""
+        from deltalake.exceptions import DeltaError
+
+        client = _make_mock_client()
+        client.delta.get_metadata = AsyncMock(
+            side_effect=DeltaError(
+                "The table's minimum reader version is 2 but deltalake only supports "
+                "version 1 or 3 with these reader features: {'timestampNtz'}"
+            )
+        )
+
+        app = _DetailHarness(client)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            detail = app.query_one("#detail", DetailPanel)
+            detail._workspace_name = "TestWS"
+            detail._item_name = "TestItem"
+
+            node = TableNode(workspace="ws", item_path="item", table_name="cm_table")
+            detail.update_for_node(node)
+
+            await pilot.pause()
+            await asyncio.sleep(0.5)
+            await pilot.pause()
+            await pilot.pause()
+
+            statics = detail.query(Static)
+            texts = [_get_widget_text(w) for w in statics]
+            assert any("advanced Delta features" in t for t in texts), (
+                f"Expected fallback warning for minimum reader version error. Found: {texts}"
+            )
