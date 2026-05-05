@@ -31,7 +31,11 @@ _USER_MANIFEST = Path.home() / ".config" / "onelaketools" / "fabric-test-env.jso
 
 
 def _load_manifest() -> dict | None:
-    """Load fabric-test-env.json — env override → in-repo → user home."""
+    """Load fabric-test-env.json — env override → in-repo → user home.
+
+    Env vars (ONELAKE_TEST_WORKSPACE_ID etc.) always take priority over
+    manifest values when set — see the config resolution section below.
+    """
     env_path = os.environ.get("ONELAKE_TEST_ENV_FILE")
     for candidate in [
         Path(env_path) if env_path else None,
@@ -53,15 +57,19 @@ def _manifest_item(key: str) -> dict | None:
     return _MANIFEST.get("items", {}).get(key)
 
 
-# ── Resolve config: manifest first, env vars as fallback ────────────────
+# ── Resolve config: env vars take priority, then manifest ───────────────
 
-WORKSPACE_ID = (
-    _MANIFEST["workspace"]["id"] if _MANIFEST else os.environ.get("ONELAKE_TEST_WORKSPACE_ID")
+WORKSPACE_ID = os.environ.get("ONELAKE_TEST_WORKSPACE_ID") or (
+    _MANIFEST["workspace"]["id"] if _MANIFEST else None
 )
 
 _lh_simple = _manifest_item("lakehouse_simple")
-LAKEHOUSE_ID = _lh_simple["id"] if _lh_simple else os.environ.get("ONELAKE_TEST_LAKEHOUSE_ID")
-LAKEHOUSE_NAME = _lh_simple["name"] if _lh_simple else os.environ.get("ONELAKE_TEST_LAKEHOUSE_NAME")
+LAKEHOUSE_ID = os.environ.get("ONELAKE_TEST_LAKEHOUSE_ID") or (
+    _lh_simple["id"] if _lh_simple else None
+)
+LAKEHOUSE_NAME = os.environ.get("ONELAKE_TEST_LAKEHOUSE_NAME") or (
+    _lh_simple["name"] if _lh_simple else None
+)
 
 # Default table for single-table tests
 TABLE_NAME = os.environ.get("ONELAKE_TEST_TABLE_NAME") or (

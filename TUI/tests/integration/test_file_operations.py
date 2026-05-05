@@ -19,8 +19,6 @@ from onelake_client.exceptions import NotFoundError
 
 # ── Helpers ─────────────────────────────────────────────────────────────
 
-LAKEHOUSE_ID = "d6038e66-1073-4661-a191-f1c83459cbda"
-
 ALL_FILES = [
     "Files/sample.csv",
     "Files/data.json",
@@ -32,9 +30,9 @@ ALL_FILES = [
 ]
 
 
-def _file_path(relative: str) -> str:
+def _file_path(lakehouse_id: str, relative: str) -> str:
     """Build the full DFS read path: {lakehouse_id}/{relative}."""
-    return f"{LAKEHOUSE_ID}/{relative}"
+    return f"{lakehouse_id}/{relative}"
 
 
 # ── CSV files ───────────────────────────────────────────────────────────
@@ -42,7 +40,8 @@ def _file_path(relative: str) -> str:
 
 class TestCsvFiles:
     async def test_read_sample_csv(self, client, workspace_id, lakehouse_id):
-        data = await client.dfs.read_file(workspace_id, _file_path("Files/sample.csv"))
+        path = _file_path(lakehouse_id, "Files/sample.csv")
+        data = await client.dfs.read_file(workspace_id, path)
         text = data.decode("utf-8")
         assert len(text) > 0
 
@@ -53,7 +52,8 @@ class TestCsvFiles:
         assert len(rows[0]) > 1, "Header should contain multiple columns"
 
     async def test_read_unicode_csv(self, client, workspace_id, lakehouse_id):
-        data = await client.dfs.read_file(workspace_id, _file_path("Files/données/résumé.csv"))
+        path = _file_path(lakehouse_id, "Files/données/résumé.csv")
+        data = await client.dfs.read_file(workspace_id, path)
         text = data.decode("utf-8")
         assert len(text) > 0
 
@@ -67,7 +67,7 @@ class TestCsvFiles:
 
 class TestJsonFiles:
     async def test_read_data_json(self, client, workspace_id, lakehouse_id):
-        data = await client.dfs.read_file(workspace_id, _file_path("Files/data.json"))
+        data = await client.dfs.read_file(workspace_id, _file_path(lakehouse_id, "Files/data.json"))
         text = data.decode("utf-8")
         parsed = json.loads(text)
         assert parsed is not None
@@ -75,7 +75,7 @@ class TestJsonFiles:
 
     async def test_read_special_chars_json(self, client, workspace_id, lakehouse_id):
         data = await client.dfs.read_file(
-            workspace_id, _file_path("Files/special (copy)/data & more.json")
+            workspace_id, _file_path(lakehouse_id, "Files/special (copy)/data & more.json")
         )
         text = data.decode("utf-8")
         parsed = json.loads(text)
@@ -88,14 +88,14 @@ class TestJsonFiles:
 
 class TestMarkdownFiles:
     async def test_read_readme_md(self, client, workspace_id, lakehouse_id):
-        data = await client.dfs.read_file(workspace_id, _file_path("Files/readme.md"))
+        data = await client.dfs.read_file(workspace_id, _file_path(lakehouse_id, "Files/readme.md"))
         text = data.decode("utf-8")
         assert len(text) > 0
         assert "#" in text, "Markdown file should contain heading markers"
 
     async def test_read_md_with_spaces_in_path(self, client, workspace_id, lakehouse_id):
         data = await client.dfs.read_file(
-            workspace_id, _file_path("Files/reports/Q1 2024 Summary.md")
+            workspace_id, _file_path(lakehouse_id, "Files/reports/Q1 2024 Summary.md")
         )
         text = data.decode("utf-8")
         assert len(text) > 0
@@ -107,7 +107,8 @@ class TestMarkdownFiles:
 
 class TestParquetFiles:
     async def test_read_nested_types_parquet(self, client, workspace_id, lakehouse_id):
-        data = await client.dfs.read_file(workspace_id, _file_path("Files/nested_types.parquet"))
+        path = _file_path(lakehouse_id, "Files/nested_types.parquet")
+        data = await client.dfs.read_file(workspace_id, path)
         if len(data) == 0:
             pytest.skip("nested_types.parquet is empty (0 bytes) — provisioning issue")
         table = pq.read_table(io.BytesIO(data))
@@ -129,14 +130,16 @@ class TestParquetFiles:
 class TestFileProperties:
     @pytest.mark.parametrize("relative_path", ALL_FILES)
     async def test_content_length_positive(self, client, workspace_id, lakehouse_id, relative_path):
-        props = await client.dfs.get_properties(workspace_id, _file_path(relative_path))
+        path = _file_path(lakehouse_id, relative_path)
+        props = await client.dfs.get_properties(workspace_id, path)
         if props.content_length == 0:
             pytest.skip(f"{relative_path}: file is 0 bytes (provisioning issue)")
         assert props.content_length > 0
 
     @pytest.mark.parametrize("relative_path", ALL_FILES)
     async def test_last_modified_valid(self, client, workspace_id, lakehouse_id, relative_path):
-        props = await client.dfs.get_properties(workspace_id, _file_path(relative_path))
+        path = _file_path(lakehouse_id, relative_path)
+        props = await client.dfs.get_properties(workspace_id, path)
         assert props.last_modified is not None, f"{relative_path}: last_modified should not be None"
         assert isinstance(props.last_modified, datetime)
 
@@ -149,5 +152,5 @@ class TestErrorCases:
         with pytest.raises(NotFoundError):
             await client.dfs.read_file(
                 workspace_id,
-                _file_path("Files/does_not_exist_abc123.txt"),
+                _file_path(lakehouse_id, "Files/does_not_exist_abc123.txt"),
             )

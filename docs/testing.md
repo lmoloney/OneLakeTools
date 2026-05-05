@@ -176,24 +176,33 @@ Both GUID-based and friendly-name-based addressing are tested:
 
 ## Known Delta Protocol Gaps
 
-Honest assessment of what is **not** yet tested, based on a Delta protocol audit. These represent future work priorities.
+Honest assessment of remaining gaps, based on a Delta protocol audit. Items marked ✅ have been addressed.
 
-### Top Gaps
+### Addressed
 
-1. **Protocol version extraction** — `minReaderVersion`, `readerFeatures` are never read from the delta log. The `deltalake` library exposes `dt.protocol()` but we don't call it.
+- ✅ **Protocol version extraction** — `DeltaTableInfo` now exposes `reader_version`, `writer_version`, `reader_features`, `writer_features` via `dt.protocol()`.
+- ✅ **Column mapping mode=id** — tested via local fixture (`column_mapping_id`) and live Fabric table with RENAME COLUMN.
+- ✅ **Liquid clustering metadata** — TUI displays "Clustered by" from properties. Live `liquid_clustered` table tested.
+- ✅ **Deletion vector warnings** — proactive warning banner shown when `deletionVectors` in `reader_features`, before any error occurs.
+- ✅ **Total row count** — extracted from `numRecords` in add actions, displayed in Schema tab.
+- ✅ **In-commit timestamps** — history tab prefers `inCommitTimestamp` over `commitInfo.timestamp`.
+- ✅ **Schema evolution (ADD COLUMN)** — live `schema_evolution_add` table and local fixture with multi-commit log.
 
-2. **Column mapping mode=id** — only `mode=name` is tested (via `column_mapping_v2` fixture). The `mode=id` path is an untested code path that could silently produce incorrect column names.
+### Remaining Gaps
 
-3. **Type widening** — no guard against schema corruption when a column type changes between commits (e.g., `int → long`). Reading with a stale schema could truncate data.
+1. **Type widening** — `ALTER COLUMN TYPE` is not supported on Fabric Spark, so we can't create a live test table. Local warning detection is tested but no live validation exists.
 
-4. **V2 checkpoints** (UUID-named) — the checkpoint reader only handles classic `00000000000000000010.checkpoint.parquet` naming. UUID-named V2 checkpoints (`_last_checkpoint` pointing to `{uuid}.checkpoint.parquet`) are untested.
+2. **V2 checkpoints** (UUID-named) — local fixture tests graceful error handling, but no live Fabric table with V2 checkpoints is available for end-to-end testing.
 
-5. **Schema evolution** (ADD/RENAME/DROP COLUMN) — zero test coverage for schema changes between Delta versions. The metadata reader always uses the latest schema.
+3. **Schema evolution (RENAME/DROP COLUMN)** — RENAME tested via `column_mapping_id`, but DROP COLUMN has no test coverage.
 
-6. **Per-file statistics** — `add` action stats (min/max/nullCount per column) are never extracted or displayed. These are useful for query planning and data profiling.
+4. **Per-file statistics** — `numRecords` is summed for `total_rows`, but min/max/nullCount per column are not extracted or displayed.
 
-7. **Liquid clustering metadata** — `clusteringColumns` in Delta table metadata are not exposed. Tables using liquid clustering show no clustering info.
+5. **Generated columns** — `GENERATED ALWAYS AS` not supported on Fabric Spark. CHECK constraints work and are tested.
 
 ### Structural Recommendation
 
-Add a `dt.protocol()` call to the metadata extraction script and expose `reader_version`, `writer_version`, `reader_features`, and `writer_features` on `DeltaTableInfo`. This single change enables fixes for gaps 1, 2, and 4 by making protocol-level information visible to both the UI and tests.
+The core `dt.protocol()` extraction is now implemented. Remaining work is incremental:
+- Extract min/max stats from add actions for data profiling
+- Display individual file statistics in a future "Files" tab
+- Handle DROP COLUMN via column mapping fixtures

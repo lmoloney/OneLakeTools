@@ -41,9 +41,17 @@ jobs:
         run: cd TUI && uv sync --extra dev
 
       - name: Run integration tests
+        id: tests
         run: cd TUI && uv run pytest tests/integration/ -v --timeout=120
         env:
           ONELAKE_TEST_WORKSPACE_ID: ${{ secrets.ONELAKE_TEST_WORKSPACE_ID }}
           ONELAKE_TEST_LAKEHOUSE_ID: ${{ secrets.ONELAKE_TEST_LAKEHOUSE_ID }}
           ONELAKE_TEST_LAKEHOUSE_NAME: ${{ secrets.ONELAKE_TEST_LAKEHOUSE_NAME }}
           ONELAKE_TEST_TABLE_NAME: ${{ secrets.ONELAKE_TEST_TABLE_NAME }}
+
+      - name: Report test outcome
+        if: always()
+        run: |
+          if [ "${{ steps.tests.outcome }}" = "failure" ]; then
+            echo "::warning::Integration tests failed — check logs for details"
+          fi
