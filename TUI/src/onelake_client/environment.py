@@ -18,6 +18,8 @@ class FabricEnvironment:
     dfs_host: str
     fabric_scope: str = "https://api.fabric.microsoft.com/.default"
     storage_scope: str = "https://storage.azure.com/.default"
+    iceberg_catalog_url: str = "https://onelake.table.fabric.microsoft.com/iceberg"
+    iceberg_blob_host: str = "onelake.blob.fabric.microsoft.com"
 
     @property
     def fabric_api_url(self) -> str:
@@ -34,18 +36,24 @@ MSIT = FabricEnvironment(
     name="MSIT",
     fabric_api_base="https://msitapi.fabric.microsoft.com",
     dfs_host="msit-onelake.dfs.fabric.microsoft.com",
+    iceberg_catalog_url="https://msit-onelake.table.fabric.microsoft.com/iceberg",
+    iceberg_blob_host="msit-onelake.blob.fabric.microsoft.com",
 )
 
 DXT = FabricEnvironment(
     name="DXT",
     fabric_api_base="https://api.dxt.fabric.microsoft.com",
     dfs_host="dxt-onelake.dfs.fabric.microsoft.com",
+    iceberg_catalog_url="https://dxt-onelake.table.fabric.microsoft.com/iceberg",
+    iceberg_blob_host="dxt-onelake.blob.fabric.microsoft.com",
 )
 
 DAILY = FabricEnvironment(
     name="DAILY",
     fabric_api_base="https://api.daily.fabric.microsoft.com",
     dfs_host="daily-onelake.dfs.fabric.microsoft.com",
+    iceberg_catalog_url="https://daily-onelake.table.fabric.microsoft.com/iceberg",
+    iceberg_blob_host="daily-onelake.blob.fabric.microsoft.com",
 )
 
 ENVIRONMENTS: dict[str, FabricEnvironment] = {
