@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Delta table metadata via friendly-name paths (workspace name + `DisplayName.Type`) now works with service principal auth by adding `use_fabric_endpoint` to delta-rs storage options — previously only GUID-based paths worked in CI (#32)
+
 ### Added
 
 - Comprehensive fixture-based test suite — 138 new tests exercising real Delta log parsing, Parquet schema introspection, path encoding, tree widget edge cases, and snapshot regression detection

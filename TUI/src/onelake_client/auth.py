@@ -191,6 +191,7 @@ class OneLakeAuth:
             "account_name": "onelake",
             "account_host": self._env.dfs_host,
             "azure_storage_token": token,
+            "use_fabric_endpoint": "true",
         }
 
     @property
