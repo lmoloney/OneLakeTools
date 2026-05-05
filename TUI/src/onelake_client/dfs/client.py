@@ -7,10 +7,8 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from onelake_client._http import create_client, paginate_dfs, request_with_retry
+from onelake_client._http import create_client, paginate_dfs, raise_for_status, request_with_retry
 from onelake_client.exceptions import (
-    ApiError,
-    AuthenticationError,
     FileTooLargeError,
     NotFoundError,
 )
@@ -241,22 +239,9 @@ class DfsClient:
             headers=headers,
             timeout=stream_timeout,
         ) as response:
-            try:
-                response.raise_for_status()
-            except httpx.HTTPStatusError as exc:
-                status = exc.response.status_code
-                await exc.response.aread()
-                body = exc.response.text
-                if status == 404:
-                    raise NotFoundError(
-                        resource=f"{workspace}/{path}",
-                        message=f"Not found: {workspace}/{path}",
-                    ) from exc
-                if status in (401, 403):
-                    raise AuthenticationError(
-                        f"Authentication/authorization failed ({status}): {body}"
-                    ) from exc
-                raise ApiError(status_code=status, body=body) from exc
+            if response.status_code >= 400:
+                await response.aread()
+                raise_for_status(response, self._on_auth_error)
             async for chunk in response.aiter_bytes(chunk_size):
                 yield chunk
 

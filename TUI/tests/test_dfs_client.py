@@ -208,9 +208,9 @@ async def test_read_file_stream_404_raises_not_found(httpx_mock, auth):
     await client.close()
 
 
-async def test_read_file_stream_403_raises_auth_error(httpx_mock, auth):
-    """Test that read_file_stream raises AuthenticationError on 403."""
-    from onelake_client.exceptions import AuthenticationError
+async def test_read_file_stream_403_raises_permission_denied(httpx_mock, auth):
+    """Test that read_file_stream raises PermissionDeniedError on 403."""
+    from onelake_client.exceptions import PermissionDeniedError
 
     httpx_mock.add_response(
         url=f"{BASE_URL}/my-workspace/MyLakehouse.Lakehouse/Files/forbidden.txt",
@@ -219,7 +219,7 @@ async def test_read_file_stream_403_raises_auth_error(httpx_mock, auth):
     )
 
     client = DfsClient(auth)
-    with pytest.raises(AuthenticationError):
+    with pytest.raises(PermissionDeniedError):
         async for _ in client.read_file_stream(
             "my-workspace", "MyLakehouse.Lakehouse/Files/forbidden.txt"
         ):
