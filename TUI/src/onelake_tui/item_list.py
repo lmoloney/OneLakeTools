@@ -156,6 +156,7 @@ class ItemList(Vertical):
     def clear_items(self) -> None:
         """Clear the items list and cache."""
         self._items.clear()
+        self._item_index.clear()
         self._item_cache.clear()
         self.query_one("#item-option-list", OptionList).clear_options()
         self.query_one("#item-header", Label).update("Items")

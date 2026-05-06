@@ -173,6 +173,9 @@ async def paginate_fabric(
         on_auth_error: Optional callback invoked on 401 before raising,
             typically used to invalidate cached tokens.
     """
+    if max_items is not None and max_items <= 0:
+        return
+
     params = dict(params or {})
     count = 0
 
@@ -220,6 +223,9 @@ async def paginate_dfs(
         on_auth_error: Optional callback invoked on 401 before raising,
             typically used to invalidate cached tokens.
     """
+    if max_items is not None and max_items <= 0:
+        return
+
     params = dict(params or {})
     count = 0
 
