@@ -150,7 +150,13 @@ class OneLakeTree(Tree[NodeData]):
 
     @work(group="load_children")
     async def _load_folder(self, node: TreeNode, data: FolderNode) -> None:
-        """Load children of a DFS folder."""
+        """Load children of a DFS folder.
+
+        Note: without exclusive=True, concurrent workers for the same node can
+        race on rapid collapse→expand. This is acceptable — remove_children()
+        at the top plus the is_expanded staleness guard means last-one-wins
+        with no corrupt state.
+        """
         node.remove_children()
         is_tables_dir = data.directory.rstrip("/").endswith("Tables")
         try:
@@ -220,7 +226,11 @@ class OneLakeTree(Tree[NodeData]):
 
     @work(group="load_children")
     async def _load_table_files(self, node: TreeNode, data: TableNode) -> None:
-        """Load contents of a table dir — detect schema folders vs actual tables."""
+        """Load contents of a table dir — detect schema folders vs actual tables.
+
+        Same concurrency note as _load_folder: last-one-wins is acceptable
+        here; a per-node generation token isn't worth the complexity.
+        """
         node.remove_children()
         table_dir = f"{data.item_path}/Tables/{data.table_name}"
         try:

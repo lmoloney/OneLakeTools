@@ -204,8 +204,11 @@ class DfsClient:
             )
             content_length = head_response.headers.get("Content-Length")
             if content_length is not None:
-                size = int(content_length)
-                if size > max_bytes:
+                try:
+                    size = int(content_length)
+                except ValueError:
+                    size = None
+                if size is not None and size > max_bytes:
                     raise FileTooLargeError(size=size, max_bytes=max_bytes)
 
         response = await request_with_retry(

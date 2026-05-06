@@ -130,6 +130,7 @@ class WorkspacePicker(Vertical):
     def refresh_workspaces(self) -> None:
         """Reload workspaces from scratch (bypasses cache)."""
         self._workspaces.clear()
+        self._workspace_index.clear()
         self._filtered.clear()
         self._cache_fetched_at = 0.0
         self.load_workspaces(force=True)

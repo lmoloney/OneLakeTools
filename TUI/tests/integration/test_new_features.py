@@ -189,6 +189,7 @@ class TestLargeParquetFile:
         assert exc_info.value.size > _MAX_BINARY_BYTES
         assert exc_info.value.max_bytes == _MAX_BINARY_BYTES
 
+    @pytest.mark.slow
     async def test_stream_large_parquet(self, client, workspace_id, lakehouse_id):
         """Streaming should return the full file content for a large parquet."""
         path = _file_path(lakehouse_id, _LARGE_PARQUET)
