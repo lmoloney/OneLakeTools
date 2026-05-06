@@ -46,6 +46,7 @@ class WorkspacePicker(Vertical):
         super().__init__(**kwargs)
         self.client = client
         self._workspaces: list[Workspace] = []
+        self._workspace_index: dict[str, Workspace] = {}
         self._filtered: list[Workspace] = []
         self._cache_fetched_at: float = 0.0
 
@@ -74,6 +75,7 @@ class WorkspacePicker(Vertical):
             self.app.notify("Fetching workspaces...", timeout=3)
             workspaces = await self.client.fabric.list_workspaces()
             self._workspaces = sorted(workspaces, key=lambda w: w.display_name.casefold())
+            self._workspace_index = {w.id: w for w in self._workspaces}
             self._filtered = list(self._workspaces)
             self._cache_fetched_at = time.monotonic()
             self._rebuild_options()
@@ -123,14 +125,12 @@ class WorkspacePicker(Vertical):
 
     def _workspace_by_id(self, ws_id: str) -> Workspace | None:
         """Look up a workspace by its ID."""
-        for ws in self._workspaces:
-            if ws.id == ws_id:
-                return ws
-        return None
+        return self._workspace_index.get(ws_id)
 
     def refresh_workspaces(self) -> None:
         """Reload workspaces from scratch (bypasses cache)."""
         self._workspaces.clear()
+        self._workspace_index.clear()
         self._filtered.clear()
         self._cache_fetched_at = 0.0
         self.load_workspaces(force=True)

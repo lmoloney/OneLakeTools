@@ -98,7 +98,7 @@ class OneLakeClient:
         self.fabric = FabricClient(self.auth, env=env)
         self.dfs = DfsClient(self.auth, env=env)
         self.delta = DeltaTableReader(self.auth, dfs_host=env.dfs_host, fabric_client=self.fabric)
-        self.iceberg = IcebergTableReader(self.auth)
+        self.iceberg = IcebergTableReader(self.auth, env=env)
 
     async def close(self) -> None:
         """Close underlying HTTP clients."""

@@ -169,9 +169,10 @@ class TestSpecialCharacters:
 
 class TestFileSizeLimit:
     async def test_read_file_exceeds_max_bytes(self, httpx_mock, auth):
+        # HEAD-first check should reject before GET
         httpx_mock.add_response(
             url=f"{DFS_URL}/ws/LH.Lakehouse/Files/big.bin",
-            content=b"x" * 100,
+            method="HEAD",
             headers={"Content-Length": "2048"},
         )
         client = DfsClient(auth)
@@ -182,8 +183,15 @@ class TestFileSizeLimit:
         await client.close()
 
     async def test_read_file_within_max_bytes(self, httpx_mock, auth):
+        # HEAD reports within limit, then GET downloads
         httpx_mock.add_response(
             url=f"{DFS_URL}/ws/LH.Lakehouse/Files/small.bin",
+            method="HEAD",
+            headers={"Content-Length": "5"},
+        )
+        httpx_mock.add_response(
+            url=f"{DFS_URL}/ws/LH.Lakehouse/Files/small.bin",
+            method="GET",
             content=b"hello",
             headers={"Content-Length": "5"},
         )
@@ -204,8 +212,14 @@ class TestFileSizeLimit:
         await client.close()
 
     async def test_read_file_max_bytes_no_content_length(self, httpx_mock, auth):
+        # HEAD has no Content-Length, so we proceed to GET
         httpx_mock.add_response(
             url=f"{DFS_URL}/ws/LH.Lakehouse/Files/mystery.bin",
+            method="HEAD",
+        )
+        httpx_mock.add_response(
+            url=f"{DFS_URL}/ws/LH.Lakehouse/Files/mystery.bin",
+            method="GET",
             content=b"mystery data",
         )
         client = DfsClient(auth)

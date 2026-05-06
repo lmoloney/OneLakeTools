@@ -148,13 +148,22 @@ class OneLakeTree(Tree[NodeData]):
         elif isinstance(data, TableNode):
             self._load_table_files(node, data)
 
-    @work(group="load_children", exclusive=True)
+    @work(group="load_children")
     async def _load_folder(self, node: TreeNode, data: FolderNode) -> None:
-        """Load children of a DFS folder."""
+        """Load children of a DFS folder.
+
+        Note: without exclusive=True, concurrent workers for the same node can
+        race on rapid collapse→expand. This is acceptable — remove_children()
+        at the top plus the is_expanded staleness guard means last-one-wins
+        with no corrupt state.
+        """
         node.remove_children()
         is_tables_dir = data.directory.rstrip("/").endswith("Tables")
         try:
             paths = await self.client.dfs.list_paths(data.workspace, data.directory)
+            # Staleness guard: if the node was collapsed while loading, skip
+            if not node.is_expanded:
+                return
             child_names = {
                 (p.name.split("/")[-1] if "/" in p.name else p.name)
                 for p in paths
@@ -215,13 +224,20 @@ class OneLakeTree(Tree[NodeData]):
                 markup=False,
             )
 
-    @work(group="load_children", exclusive=True)
+    @work(group="load_children")
     async def _load_table_files(self, node: TreeNode, data: TableNode) -> None:
-        """Load contents of a table dir — detect schema folders vs actual tables."""
+        """Load contents of a table dir — detect schema folders vs actual tables.
+
+        Same concurrency note as _load_folder: last-one-wins is acceptable
+        here; a per-node generation token isn't worth the complexity.
+        """
         node.remove_children()
         table_dir = f"{data.item_path}/Tables/{data.table_name}"
         try:
             paths = await self.client.dfs.list_paths(data.workspace, table_dir)
+            # Staleness guard: if the node was collapsed while loading, skip
+            if not node.is_expanded:
+                return
             child_names = {
                 (p.name.split("/")[-1] if "/" in p.name else p.name)
                 for p in paths

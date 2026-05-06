@@ -31,10 +31,15 @@ class FabricClient:
             from onelake_client.environment import DEFAULT_ENVIRONMENT
 
             env = DEFAULT_ENVIRONMENT
+        self._env = env
         self._base_url = env.fabric_api_url
         self._client = client
         self._owns_client = client is None
         self._client_lock = asyncio.Lock()
+
+    def _on_auth_error(self) -> None:
+        """Invalidate cached Fabric token on 401 so next request re-acquires."""
+        self._auth.invalidate_token(self._env.fabric_scope)
 
     async def _get_client(self) -> httpx.AsyncClient:
         async with self._client_lock:
@@ -48,16 +53,25 @@ class FabricClient:
             await self._client.aclose()
             self._client = None
 
-    async def list_workspaces(self) -> list[Workspace]:
+    async def list_workspaces(self, *, max_items: int | None = None) -> list[Workspace]:
         """List all accessible workspaces.
 
         GET /v1/workspaces — paginated via continuationToken.
+
+        Args:
+            max_items: Stop after this many workspaces. None means unlimited.
         """
         client = await self._get_client()
-        headers = self._auth.fabric_headers()
+        headers = await self._auth.fabric_headers_async()
         workspaces: list[Workspace] = []
 
-        async for item in paginate_fabric(client, f"{self._base_url}/workspaces", headers=headers):
+        async for item in paginate_fabric(
+            client,
+            f"{self._base_url}/workspaces",
+            headers=headers,
+            on_auth_error=self._on_auth_error,
+            max_items=max_items,
+        ):
             workspaces.append(Workspace.model_validate(item))
 
         return workspaces
@@ -67,6 +81,7 @@ class FabricClient:
         workspace_id: str,
         *,
         item_type: str | None = None,
+        max_items: int | None = None,
     ) -> list[Item]:
         """List items in a workspace, optionally filtered by type.
 
@@ -75,9 +90,10 @@ class FabricClient:
         Args:
             workspace_id: The workspace GUID.
             item_type: Optional filter — e.g., "Lakehouse", "Warehouse", "Notebook".
+            max_items: Stop after this many items. None means unlimited.
         """
         client = await self._get_client()
-        headers = self._auth.fabric_headers()
+        headers = await self._auth.fabric_headers_async()
         params: dict[str, str] = {}
         if item_type:
             params["type"] = item_type
@@ -88,6 +104,8 @@ class FabricClient:
             f"{self._base_url}/workspaces/{workspace_id}/items",
             headers=headers,
             params=params,
+            on_auth_error=self._on_auth_error,
+            max_items=max_items,
         ):
             items.append(Item.model_validate(raw))
 
@@ -99,13 +117,14 @@ class FabricClient:
         GET /v1/workspaces/{workspaceId}/lakehouses
         """
         client = await self._get_client()
-        headers = self._auth.fabric_headers()
+        headers = await self._auth.fabric_headers_async()
         lakehouses: list[Lakehouse] = []
 
         async for raw in paginate_fabric(
             client,
             f"{self._base_url}/workspaces/{workspace_id}/lakehouses",
             headers=headers,
+            on_auth_error=self._on_auth_error,
         ):
             lakehouses.append(Lakehouse.model_validate(raw))
 
@@ -118,12 +137,13 @@ class FabricClient:
         Returns SQL endpoint info, OneLake paths, and properties.
         """
         client = await self._get_client()
-        headers = self._auth.fabric_headers()
+        headers = await self._auth.fabric_headers_async()
 
         response = await request_with_retry(
             client,
             "GET",
             f"{self._base_url}/workspaces/{workspace_id}/lakehouses/{lakehouse_id}",
             headers=headers,
+            on_auth_error=self._on_auth_error,
         )
         return Lakehouse.model_validate(response.json())

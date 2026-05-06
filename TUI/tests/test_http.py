@@ -191,6 +191,20 @@ class TestRequestWithRetry:
             with pytest.raises(AuthenticationError):
                 await request_with_retry(client, "GET", TEST_URL)
 
+    async def test_401_invokes_on_auth_error_callback(self, httpx_mock):
+        """Verify on_auth_error callback is invoked on 401 before raising."""
+        httpx_mock.add_response(url=TEST_URL, status_code=401, text="bad token")
+        callback_called = False
+
+        def on_auth_error():
+            nonlocal callback_called
+            callback_called = True
+
+        async with httpx.AsyncClient() as client:
+            with pytest.raises(AuthenticationError):
+                await request_with_retry(client, "GET", TEST_URL, on_auth_error=on_auth_error)
+        assert callback_called
+
     async def test_404_raises_not_found_error_no_retry(self, httpx_mock):
         httpx_mock.add_response(url=TEST_URL, status_code=404, text="gone")
         async with httpx.AsyncClient() as client:

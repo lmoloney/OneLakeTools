@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- Token acquisition no longer blocks the async event loop — `FabricClient` and `DfsClient` now use async header methods that wrap blocking credential calls in `asyncio.to_thread()`
+- 401 responses now trigger token cache invalidation via `on_auth_error` callbacks wired through `request_with_retry` and pagination helpers — previously this recovery path was dead code
+- `read_file(max_bytes=...)` now enforces the size limit via a HEAD request before downloading the body, preventing large files from being fully buffered in memory
+- `read_file_stream` now uses the shared `raise_for_status` error mapping — 403 correctly raises `PermissionDeniedError` (was `AuthenticationError`), 429 raises `RateLimitError` (was `ApiError`)
+- Tree child-loading no longer cancels across unrelated nodes — removed `exclusive=True` from the `load_children` work group and added staleness guards to prevent empty folder nodes after rapid expansion
+- `IcebergTableReader` now uses environment-aware catalog and blob host URLs instead of hardcoded PROD endpoints — non-PROD rings (MSIT, DXT, DAILY) now hit the correct Iceberg endpoints
+- Updated SECURITY.md supported versions table (0.2.x → 0.4.x)
+
+### Added
+
+- `fabric_headers_async()` and `dfs_headers_async()` methods on `OneLakeAuth` for non-blocking token acquisition
+- `max_items` parameter on `list_workspaces()` and `list_items()` to cap API results for large tenants
+- `iceberg_catalog_url` and `iceberg_blob_host` fields on `FabricEnvironment` with per-ring values
+
+### Changed
+
+- Workspace and item lookups in TUI widgets now use O(1) dict indexes instead of O(n) linear scans
+
 ## [0.4.0] - 2026-05-05
 
 ### Fixed

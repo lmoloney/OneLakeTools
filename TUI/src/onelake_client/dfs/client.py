@@ -7,10 +7,8 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from onelake_client._http import create_client, paginate_dfs, request_with_retry
+from onelake_client._http import create_client, paginate_dfs, raise_for_status, request_with_retry
 from onelake_client.exceptions import (
-    ApiError,
-    AuthenticationError,
     FileTooLargeError,
     NotFoundError,
 )
@@ -104,11 +102,16 @@ class DfsClient:
             from onelake_client.environment import DEFAULT_ENVIRONMENT
 
             env = DEFAULT_ENVIRONMENT
+        self._env = env
         self._dfs_host = env.dfs_host
         self._base_url = f"https://{self._dfs_host}"
         self._client = client
         self._owns_client = client is None
         self._client_lock = asyncio.Lock()
+
+    def _on_auth_error(self) -> None:
+        """Invalidate cached DFS token on 401 so next request re-acquires."""
+        self._auth.invalidate_token(self._env.storage_scope)
 
     @property
     def dfs_host(self) -> str:
@@ -151,7 +154,7 @@ class DfsClient:
             List of PathInfo objects.
         """
         client = await self._get_client()
-        headers = _dfs_headers(self._auth.dfs_headers())
+        headers = _dfs_headers(await self._auth.dfs_headers_async())
 
         full_directory = f"{item_path}/{directory}" if directory else item_path
 
@@ -164,7 +167,9 @@ class DfsClient:
         url = f"{self._base_url}/{workspace}"
         paths: list[PathInfo] = []
 
-        async for raw in paginate_dfs(client, url, headers=headers, params=params):
+        async for raw in paginate_dfs(
+            client, url, headers=headers, params=params, on_auth_error=self._on_auth_error
+        ):
             paths.append(_parse_path_info(raw))
 
         return paths
@@ -176,10 +181,11 @@ class DfsClient:
             workspace: Workspace name or GUID.
             path: Full path within the workspace
                   (e.g., "MyLakehouse.Lakehouse/Files/data.csv").
-            max_bytes: Optional size limit. If the server reports a
+            max_bytes: Optional size limit. A HEAD request is issued first
+                to check the file size. If the server reports a
                 ``Content-Length`` exceeding this value, a
                 :class:`~onelake_client.exceptions.FileTooLargeError` is
-                raised *before* the body is read.
+                raised *before* the body is downloaded.
 
         Returns:
             File content as bytes.
@@ -188,21 +194,26 @@ class DfsClient:
             FileTooLargeError: If the file exceeds *max_bytes*.
         """
         client = await self._get_client()
-        headers = _dfs_headers(self._auth.dfs_headers())
+        headers = _dfs_headers(await self._auth.dfs_headers_async())
+        url = f"{self._base_url}/{workspace}/{path}"
+
+        # Check file size with HEAD before downloading the body
+        if max_bytes is not None:
+            head_response = await request_with_retry(
+                client, "HEAD", url, headers=headers, on_auth_error=self._on_auth_error
+            )
+            content_length = head_response.headers.get("Content-Length")
+            if content_length is not None:
+                try:
+                    size = int(content_length)
+                except ValueError:
+                    size = None
+                if size is not None and size > max_bytes:
+                    raise FileTooLargeError(size=size, max_bytes=max_bytes)
 
         response = await request_with_retry(
-            client,
-            "GET",
-            f"{self._base_url}/{workspace}/{path}",
-            headers=headers,
+            client, "GET", url, headers=headers, on_auth_error=self._on_auth_error
         )
-
-        if max_bytes is not None:
-            content_length = response.headers.get("Content-Length")
-            if content_length is not None:
-                size = int(content_length)
-                if size > max_bytes:
-                    raise FileTooLargeError(size=size, max_bytes=max_bytes)
 
         return response.content
 
@@ -222,7 +233,7 @@ class DfsClient:
             Chunks of file content.
         """
         client = await self._get_client()
-        headers = _dfs_headers(self._auth.dfs_headers())
+        headers = _dfs_headers(await self._auth.dfs_headers_async())
 
         stream_timeout = httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0)
         async with client.stream(
@@ -231,22 +242,9 @@ class DfsClient:
             headers=headers,
             timeout=stream_timeout,
         ) as response:
-            try:
-                response.raise_for_status()
-            except httpx.HTTPStatusError as exc:
-                status = exc.response.status_code
-                await exc.response.aread()
-                body = exc.response.text
-                if status == 404:
-                    raise NotFoundError(
-                        resource=f"{workspace}/{path}",
-                        message=f"Not found: {workspace}/{path}",
-                    ) from exc
-                if status in (401, 403):
-                    raise AuthenticationError(
-                        f"Authentication/authorization failed ({status}): {body}"
-                    ) from exc
-                raise ApiError(status_code=status, body=body) from exc
+            if response.status_code >= 400:
+                await response.aread()
+                raise_for_status(response, self._on_auth_error)
             async for chunk in response.aiter_bytes(chunk_size):
                 yield chunk
 
@@ -261,13 +259,14 @@ class DfsClient:
             FileProperties with size, content type, last modified, etc.
         """
         client = await self._get_client()
-        headers = _dfs_headers(self._auth.dfs_headers())
+        headers = _dfs_headers(await self._auth.dfs_headers_async())
 
         response = await request_with_retry(
             client,
             "HEAD",
             f"{self._base_url}/{workspace}/{path}",
             headers=headers,
+            on_auth_error=self._on_auth_error,
         )
         return _parse_file_properties(response)
 

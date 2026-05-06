@@ -8,16 +8,18 @@ from onelake_client.models.table import Column, IcebergTableInfo
 
 if TYPE_CHECKING:
     from onelake_client.auth import OneLakeAuth
+    from onelake_client.environment import FabricEnvironment
 
 logger = logging.getLogger("onelake_client.tables.iceberg")
-
-_ICEBERG_CATALOG_URL = "https://onelake.table.fabric.microsoft.com/iceberg"
 
 
 class IcebergTableReader:
     """Reads Iceberg table metadata from OneLake via the IRC endpoint.
 
     Uses the `pyiceberg` library pointed at OneLake's Iceberg REST Catalog.
+
+    The catalog and blob host URLs are derived from the ``FabricEnvironment``
+    so that non-PROD rings (MSIT, DXT, DAILY) use the correct endpoints.
 
     Usage:
         auth = OneLakeAuth()
@@ -27,8 +29,13 @@ class IcebergTableReader:
         info = await reader.get_metadata("workspace-guid", "lakehouse-guid", "dbo", "customers")
     """
 
-    def __init__(self, auth: OneLakeAuth):
+    def __init__(self, auth: OneLakeAuth, *, env: FabricEnvironment | None = None):
         self._auth = auth
+        if env is None:
+            from onelake_client.environment import DEFAULT_ENVIRONMENT
+
+            env = DEFAULT_ENVIRONMENT
+        self._env = env
 
     def _build_catalog_sync(self, workspace_id: str, item_id: str):
         """Build a pyiceberg REST catalog pointing at OneLake (sync)."""
@@ -40,11 +47,11 @@ class IcebergTableReader:
         return load_catalog(
             "onelake",
             **{
-                "uri": _ICEBERG_CATALOG_URL,
+                "uri": self._env.iceberg_catalog_url,
                 "token": token,
                 "warehouse": warehouse,
                 "adls.account-name": "onelake",
-                "adls.account-host": "onelake.blob.fabric.microsoft.com",
+                "adls.account-host": self._env.iceberg_blob_host,
             },
         )
 
