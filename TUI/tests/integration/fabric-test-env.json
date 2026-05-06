@@ -32,13 +32,15 @@
         "column_mapping_id",
         "liquid_clustered",
         "generated_and_checks",
-        "schema_evolution_type"
+        "schema_evolution_type",
+        "large_customers"
       ],
       "expected_files": [
         "Files/sample.csv",
         "Files/data.json",
         "Files/readme.md",
         "Files/nested_types.parquet",
+        "Files/large_customers.parquet",
         "Files/reports/Q1 2024 Summary.md",
         "Files/donn\u00e9es/r\u00e9sum\u00e9.csv",
         "Files/special (copy)/data & more.json"
@@ -130,9 +132,18 @@
           "writer_version": 2,
           "has_check_constraint": true,
           "notes": "Generated columns not supported on Fabric Spark - full_name is regular STRING"
+        },
+        "large_customers": {
+          "reader_version": 1,
+          "writer_version": 4,
+          "partition_columns": [],
+          "expected_columns": ["customer_id", "first_name", "last_name", "email", "phone", "address", "city", "state", "country", "postal_code", "company", "job_title", "account_balance", "credit_score", "membership_tier"],
+          "min_version": 2,
+          "total_rows": 9900000,
+          "notes": "Large table (420 MB, 9.9M rows) copied from Demos workspace precooked_standard_table. Used for size-limit and streaming tests. TODO: Replace with Spark-provisioned deterministic test data."
         }
       },
-      "notes": "Simple lakehouse without schema folders. Tables directly under Tables/. Includes: all data types, partitioned table, CDF-enabled, OPTIMIZE+ZORDER, high-version with checkpoint, timestamp edge cases, in-commit timestamps, deletion vectors, schema evolution, column mapping, liquid clustering, generated columns and check constraints. Files include unicode paths, spaces, parentheses, ampersands."
+      "notes": "Simple lakehouse without schema folders. Tables directly under Tables/. Includes: all data types, partitioned table, CDF-enabled, OPTIMIZE+ZORDER, high-version with checkpoint, timestamp edge cases, in-commit timestamps, deletion vectors, schema evolution, column mapping, liquid clustering, generated columns and check constraints, large table (420 MB, 9.9M rows). Files include unicode paths, spaces, parentheses, ampersands, and a standalone large parquet (81 MB)."
     },
     "lakehouse_schema": {
       "id": "33ea9d8a-572e-4c37-9fc9-ce91c79c3395",

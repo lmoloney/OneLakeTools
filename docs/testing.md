@@ -137,7 +137,7 @@ Integration tests are configured via a JSON manifest rather than individual envi
 
 | Item | Type | Contents |
 |------|------|----------|
-| `olt_lakehouse_simple` | Lakehouse | 15 Delta tables + 7 files |
+| `olt_lakehouse_simple` | Lakehouse | 16 Delta tables + 8 files |
 | `olt_lakehouse_schema` | Lakehouse | 4 tables across 2 schemas (dbo, analytics) |
 | `olt-warehouse` | Warehouse | 2 tables + Iceberg metadata |
 | `olt_mirror_standard` | MirroredDatabase | 3 tables in dbo (GenericMirror) |
@@ -162,6 +162,7 @@ Integration tests are configured via a JSON manifest rather than individual envi
 | `column_mapping_id` | Column mapping mode=id, RENAME COLUMN |
 | `liquid_clustered` | CLUSTER BY (category, region) |
 | `generated_and_checks` | CHECK constraint (age > 0) |
+| `large_customers` | Large table (420 MB, 9.9M rows, 15 cols) for size-limit and streaming tests |
 
 ### Integration Test Coverage
 
@@ -186,6 +187,12 @@ Both GUID-based and friendly-name-based addressing are tested:
 - **Friendly-name mode:** `GET /{workspaceName}?resource=filesystem&directory={itemName}.{itemType}/...`
 
 > **Important:** You cannot mix modes — a GUID workspace with a friendly-name item path (or vice versa) returns errors.
+
+### Large File Test Data
+
+`large_customers` (Delta table, 420 MB) and `large_customers.parquet` (standalone, 81 MB) are copies of data from the `Demos/precooked_standard_table` in workspace `e1b5da95-2f32-4f5a-8f45-e9634cd2affb`. They test `read_file(max_bytes)` HEAD enforcement, `read_file_stream` on real-size data, and Delta metadata loading on large tables.
+
+> **TODO:** Replace with Spark-provisioned deterministic test data. The current approach is a shortcut copy — the data is not regenerated on each test run and could drift if the source table changes.
 
 ## Known Delta Protocol Gaps
 

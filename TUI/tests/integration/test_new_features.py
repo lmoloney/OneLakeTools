@@ -160,3 +160,93 @@ class TestMaxItemsPagination:
         all_ws = await client.fabric.list_workspaces()
         explicit_none = await client.fabric.list_workspaces(max_items=None)
         assert len(all_ws) == len(explicit_none)
+
+
+# ---------------------------------------------------------------------------
+# 4. Large file tests (81 MB standalone parquet + 420 MB Delta table)
+# ---------------------------------------------------------------------------
+
+_LARGE_PARQUET = "Files/large_customers.parquet"
+_LARGE_TABLE = "large_customers"
+_LARGE_PARQUET_SIZE_MB = 81  # approximate
+_MAX_BINARY_BYTES = 50 * 1024 * 1024  # 50 MB — matches detail.py limit
+
+
+class TestLargeParquetFile:
+    """Tests against an 81 MB standalone parquet file in Files/."""
+
+    async def test_large_parquet_exists(self, client, workspace_id, lakehouse_id):
+        path = _file_path(lakehouse_id, _LARGE_PARQUET)
+        props = await client.dfs.get_properties(workspace_id, path)
+        assert props.content_length > _MAX_BINARY_BYTES, (
+            f"large_customers.parquet should be >{_MAX_BINARY_BYTES} bytes, "
+            f"got {props.content_length}"
+        )
+
+    async def test_max_bytes_rejects_large_parquet(self, client, workspace_id, lakehouse_id):
+        """HEAD-first check should reject an 81 MB parquet with a 50 MB limit."""
+        path = _file_path(lakehouse_id, _LARGE_PARQUET)
+        with pytest.raises(FileTooLargeError) as exc_info:
+            await client.dfs.read_file(workspace_id, path, max_bytes=_MAX_BINARY_BYTES)
+        assert exc_info.value.size > _MAX_BINARY_BYTES
+        assert exc_info.value.max_bytes == _MAX_BINARY_BYTES
+
+    async def test_stream_large_parquet(self, client, workspace_id, lakehouse_id):
+        """Streaming should return the full file content for a large parquet."""
+        path = _file_path(lakehouse_id, _LARGE_PARQUET)
+        props = await client.dfs.get_properties(workspace_id, path)
+
+        total = 0
+        chunk_count = 0
+        async for chunk in client.dfs.read_file_stream(workspace_id, path):
+            total += len(chunk)
+            chunk_count += 1
+
+        assert total == props.content_length
+        assert chunk_count > 1, "Large file should produce multiple chunks"
+
+    @pytest.mark.slow
+    async def test_stream_large_parquet_is_valid(self, client, workspace_id, lakehouse_id):
+        """Streamed parquet bytes should parse into a valid pyarrow table."""
+        import io
+
+        import pyarrow.parquet as pq
+
+        path = _file_path(lakehouse_id, _LARGE_PARQUET)
+        chunks: list[bytes] = []
+        async for chunk in client.dfs.read_file_stream(workspace_id, path):
+            chunks.append(chunk)
+        buf = io.BytesIO(b"".join(chunks))
+        table = pq.read_table(buf)
+        assert table.num_rows > 0
+        assert table.num_columns >= 15  # 15 data cols + possible _change_type
+
+
+class TestLargeDeltaTable:
+    """Tests against a 420 MB / 9.9M-row Delta table."""
+
+    async def test_metadata_loads(self, client, workspace_id, lakehouse_id):
+        info = await client.delta.get_metadata(workspace_id, lakehouse_id, _LARGE_TABLE)
+        assert info.num_files == 2
+        assert info.total_rows == 9_900_000
+        assert info.size_bytes > 400 * 1024 * 1024  # > 400 MB
+        assert len(info.schema_) == 15
+
+    async def test_read_sample_returns_limited_rows(self, client, workspace_id, lakehouse_id):
+        """read_sample should return exactly `limit` rows, not all 9.9M."""
+        sample = await client.delta.read_sample(
+            workspace_id, lakehouse_id, _LARGE_TABLE, limit=50
+        )
+        assert sample.num_rows == 50
+        col_names = (
+            sample.column_names
+            if hasattr(sample, "column_names")
+            else [sample.schema.field(i).name for i in range(sample.num_columns)]
+        )
+        assert "customer_id" in col_names
+        assert "email" in col_names
+
+    async def test_list_files_returns_parquet(self, client, workspace_id, lakehouse_id):
+        files = await client.delta.list_files(workspace_id, lakehouse_id, _LARGE_TABLE)
+        assert len(files) == 2
+        assert all(".parquet" in f for f in files)
