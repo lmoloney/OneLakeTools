@@ -110,9 +110,7 @@ class TestReadFileMaxBytes:
             pytest.skip("sample.csv is 0 bytes — provisioning issue")
 
         # Set max_bytes to the exact file size — should succeed
-        data = await client.dfs.read_file(
-            workspace_id, path, max_bytes=props.content_length
-        )
+        data = await client.dfs.read_file(workspace_id, path, max_bytes=props.content_length)
         assert len(data) == props.content_length
 
     async def test_no_max_bytes_backwards_compat(self, client, workspace_id, lakehouse_id):
@@ -234,9 +232,7 @@ class TestLargeDeltaTable:
 
     async def test_read_sample_returns_limited_rows(self, client, workspace_id, lakehouse_id):
         """read_sample should return exactly `limit` rows, not all 9.9M."""
-        sample = await client.delta.read_sample(
-            workspace_id, lakehouse_id, _LARGE_TABLE, limit=50
-        )
+        sample = await client.delta.read_sample(workspace_id, lakehouse_id, _LARGE_TABLE, limit=50)
         assert sample.num_rows == 50
         col_names = (
             sample.column_names
