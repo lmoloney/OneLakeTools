@@ -262,11 +262,11 @@ The `.avro` handler is a distinct code path (`_preview_avro`) and should be test
 
 | Category | Tests | Files | Description |
 |----------|-------|-------|-------------|
-| Client Library | 318 | 12 | Auth, HTTP, DFS, Fabric API, Delta reader, Iceberg, models, paths, error handling, edge cases |
-| TUI Graphical | 113 | 7 | Widget smoke tests, navigation flow, file previews, table views, widget loading |
+| Client Library | 344 | 12 | Auth, HTTP, DFS, Fabric API, Delta reader, Iceberg, models, paths, error handling, edge cases |
+| TUI Graphical | 113 | 6 | Widget smoke tests, navigation flow, file previews, table views, widget loading |
 | Fixture / Snapshot | 108 | 3 | Delta log parsing, Parquet introspection, syrupy regression snapshots |
 | Integration | 170 | 9 | Live Fabric workspace: DFS browsing, Delta tables, files, schema lakehouse, warehouse, mirrors, protocol, streaming, large files |
-| Other | 78 | 3 | App interactions, copy menu, sprite |
+| Other | 52 | 4 | App interactions, detail features, copy menu, sprite |
 | **Total** | **787** | **34** | |
 
 ### Unit Tests
