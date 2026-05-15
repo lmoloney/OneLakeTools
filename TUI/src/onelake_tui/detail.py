@@ -653,12 +653,17 @@ class DetailPanel(VerticalScroll):
         cdf_pane = self.query_one("#tab-cdf", TabPane)
         for child in list(cdf_pane.children):
             child.remove()
+
+        starting = max(0, delta_info.version - 10)
         await cdf_pane.mount(
-            Static("Loading CDF data…", id="cdf-loading", classes="detail-section")
+            Static(
+                f"Loading CDF data (versions {starting}–{delta_info.version})…",
+                id="cdf-loading",
+                classes="detail-section",
+            )
         )
 
         try:
-            starting = max(0, delta_info.version - 10)
             cdf_table = await self.client.delta.read_cdf(
                 table_data.workspace,
                 table_data.item_path,
@@ -686,6 +691,12 @@ class DetailPanel(VerticalScroll):
                 delta_info.version,
             )
             try:
+                with contextlib.suppress(NoMatches):
+                    loading = self.query_one("#cdf-loading", Static)
+                    loading.update(
+                        f"CDF not available at version {starting} "
+                        f"— retrying with latest version ({delta_info.version})…"
+                    )
                 cdf_table = await self.client.delta.read_cdf(
                     table_data.workspace,
                     table_data.item_path,
@@ -793,7 +804,7 @@ class DetailPanel(VerticalScroll):
             child.remove()
         await cdf_pane.mount(
             Static(
-                "Searching for earliest CDF-enabled version…",
+                "Searching for earliest CDF-enabled version — this may take a moment…",
                 id="cdf-loading",
                 classes="detail-section",
             )
