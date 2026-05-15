@@ -417,32 +417,42 @@ class DetailPanel(VerticalScroll):
                         max_bytes=_MAX_DELTA_LOG_BYTES,
                     )
 
+                # Collect metaData configuration from the same log file
+                config_changes: dict[str, str] = {}
+                commit_lines: list[dict] = []
                 for line in raw.decode("utf-8", errors="replace").strip().splitlines():
                     line = line.strip()
                     if not line:
                         continue
                     try:
                         obj = json.loads(line)
-                        if "commitInfo" not in obj:
-                            continue
-                        ci = obj["commitInfo"]
-                        fname = path_info.name.split("/")[-1]
-                        version = fname.replace(".json", "").lstrip("0") or "0"
-                        # Prefer inCommitTimestamp (more accurate for
-                        # ICT-enabled tables)
-                        ts_raw = ci.get("inCommitTimestamp") or ci.get("timestamp")
-                        if ts_raw is None and path_info.last_modified:
-                            ts_raw = path_info.last_modified
-                        file_commits.append(
-                            {
-                                "version": version,
-                                "timestamp": ts_raw,
-                                "operation": ci.get("operation", ""),
-                                "metrics": ci.get("operationMetrics", {}),
-                            }
-                        )
                     except json.JSONDecodeError:
                         continue
+
+                    if "metaData" in obj:
+                        cfg = obj["metaData"].get("configuration", {})
+                        if cfg:
+                            config_changes = cfg
+
+                    if "commitInfo" in obj:
+                        commit_lines.append(obj)
+
+                for obj in commit_lines:
+                    ci = obj["commitInfo"]
+                    fname = path_info.name.split("/")[-1]
+                    version = fname.replace(".json", "").lstrip("0") or "0"
+                    ts_raw = ci.get("inCommitTimestamp") or ci.get("timestamp")
+                    if ts_raw is None and path_info.last_modified:
+                        ts_raw = path_info.last_modified
+                    file_commits.append(
+                        {
+                            "version": version,
+                            "timestamp": ts_raw,
+                            "operation": ci.get("operation", ""),
+                            "metrics": ci.get("operationMetrics", {}),
+                            "configuration": config_changes,
+                        }
+                    )
                 return file_commits
 
             results = await asyncio.gather(
@@ -465,7 +475,7 @@ class DetailPanel(VerticalScroll):
             if commits:
                 tbl = DataTable(id="txn-table")
                 await txn_pane.mount(tbl)
-                tbl.add_columns("Version", "Timestamp", "Operation", "Metrics")
+                tbl.add_columns("Version", "Timestamp", "Operation", "Metrics", "Configuration")
                 for c in commits:
                     ts = c["timestamp"]
                     if isinstance(ts, datetime):
@@ -480,7 +490,13 @@ class DetailPanel(VerticalScroll):
                     metrics_str = (
                         ", ".join(f"{k}={v}" for k, v in metrics.items()) if metrics else ""
                     )
-                    tbl.add_row(str(c["version"]), str(ts), c["operation"], metrics_str)
+                    config = c.get("configuration") or {}
+                    config_str = (
+                        ", ".join(f"{k}={v}" for k, v in config.items()) if config else ""
+                    )
+                    tbl.add_row(
+                        str(c["version"]), str(ts), c["operation"], metrics_str, config_str
+                    )
             else:
                 await txn_pane.mount(Static("[dim]No transaction history found[/dim]"))
         except Exception as e:

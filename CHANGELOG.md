@@ -23,6 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `fabric_headers_async()` and `dfs_headers_async()` methods on `OneLakeAuth` for non-blocking token acquisition
 - `max_items` parameter on `list_workspaces()` and `list_items()` to cap API results for large tenants
 - `iceberg_catalog_url` and `iceberg_blob_host` fields on `FabricEnvironment` with per-ring values
+- History tab now shows a **Configuration** column with table property changes (e.g. `delta.enableChangeDataFeed=true`) extracted from `metaData` actions in the Delta log
 
 ### Changed
 

@@ -930,7 +930,7 @@ class TestHistoryTab:
             history_pane = detail.query_one("#tab-history", TabPane)
             dt = history_pane.query_one(DataTable)
             assert dt.row_count == 2
-            assert len(dt.columns) == 4  # Version, Timestamp, Operation, Metrics
+            assert len(dt.columns) == 5  # Version, Timestamp, Operation, Metrics, Configuration
         finally:
             await ctx.__aexit__(None, None, None)
 
