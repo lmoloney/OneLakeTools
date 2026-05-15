@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Tree child-loading no longer cancels across unrelated nodes — removed `exclusive=True` from the `load_children` work group and added staleness guards to prevent empty folder nodes after rapid expansion
 - `IcebergTableReader` now uses environment-aware catalog and blob host URLs instead of hardcoded PROD endpoints — non-PROD rings (MSIT, DXT, DAILY) now hit the correct Iceberg endpoints
 - Updated SECURITY.md supported versions table (0.2.x → 0.4.x)
+- Data preview on Windows no longer fails with `'No time zone found with key UTC'` — added `tzdata` dependency for Windows where the OS lacks a system timezone database
 
 ### Added
 
