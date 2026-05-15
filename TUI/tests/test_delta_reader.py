@@ -1209,6 +1209,146 @@ class TestReadCDF:
         assert result == mock_cdf_table
 
 
+# ── is_cdf_not_enabled_error ────────────────────────────────────────────
+
+
+class TestIsCdfNotEnabledError:
+    """Test the CDF error classifier helper."""
+
+    def test_version_specific_message(self):
+        """Matches delta-rs 'version N that does not have change data enabled'."""
+        from onelake_client.tables.delta import is_cdf_not_enabled_error
+
+        exc = DeltaError(
+            "External error: Reading a table version: 0 "
+            "that does not have change data enabled"
+        )
+        assert is_cdf_not_enabled_error(exc) is True
+
+    def test_table_level_message(self):
+        """Matches delta-rs 'Change data feed is not enabled for this table'."""
+        from onelake_client.tables.delta import is_cdf_not_enabled_error
+
+        exc = DeltaError("Change data feed is not enabled for this table")
+        assert is_cdf_not_enabled_error(exc) is True
+
+    def test_unrelated_delta_error(self):
+        """Does not match unrelated DeltaError messages."""
+        from onelake_client.tables.delta import is_cdf_not_enabled_error
+
+        exc = DeltaError("External error: failed to read delta log")
+        assert is_cdf_not_enabled_error(exc) is False
+
+    def test_network_error(self):
+        """Does not match network errors."""
+        from onelake_client.tables.delta import is_cdf_not_enabled_error
+
+        exc = ConnectionError("Connection refused")
+        assert is_cdf_not_enabled_error(exc) is False
+
+    def test_case_insensitive(self):
+        """Matching is case-insensitive."""
+        from onelake_client.tables.delta import is_cdf_not_enabled_error
+
+        exc = DeltaError("DOES NOT HAVE CHANGE DATA ENABLED")
+        assert is_cdf_not_enabled_error(exc) is True
+
+
+# ── DeltaTableReader.find_cdf_start_version ─────────────────────────────
+
+
+class TestFindCdfStartVersion:
+    """Test binary search for earliest CDF-enabled version."""
+
+    @pytest.fixture()
+    def auth(self):
+        from onelake_client.auth import OneLakeAuth
+        from tests.conftest import FakeCredential
+
+        return OneLakeAuth(credential=FakeCredential())
+
+    def _patch_reader(self, reader, dt_mock):
+        reader._isolate = False
+        return patch.object(reader, "_load_table_sync", return_value=dt_mock)
+
+    @pytest.mark.asyncio()
+    async def test_finds_earliest_enabled_version(self, auth):
+        """Binary search finds the first version where CDF succeeds."""
+        # CDF enabled from version 5 onward (versions 0-4 fail)
+        def _load_cdf(starting_version, ending_version):
+            if starting_version < 5:
+                raise DeltaError(
+                    f"Reading a table version: {starting_version} "
+                    "that does not have change data enabled"
+                )
+            result = MagicMock()
+            del result.read_all
+            return result
+
+        dt_mock = MagicMock()
+        dt_mock.version.return_value = 10
+        dt_mock.load_cdf.side_effect = _load_cdf
+
+        reader = DeltaTableReader(auth)
+        with self._patch_reader(reader, dt_mock):
+            result = await reader.find_cdf_start_version(
+                "ws", "LH.Lakehouse", "t", low=0, high=10
+            )
+
+        assert result == 5
+
+    @pytest.mark.asyncio()
+    async def test_cdf_enabled_from_start(self, auth):
+        """Returns 0 if CDF is enabled from the first version."""
+        dt_mock = MagicMock()
+        dt_mock.version.return_value = 5
+        mock_reader = MagicMock()
+        del mock_reader.read_all
+        dt_mock.load_cdf.return_value = mock_reader
+
+        reader = DeltaTableReader(auth)
+        with self._patch_reader(reader, dt_mock):
+            result = await reader.find_cdf_start_version(
+                "ws", "LH.Lakehouse", "t", low=0, high=5
+            )
+
+        assert result == 0
+
+    @pytest.mark.asyncio()
+    async def test_no_cdf_version_found_raises(self, auth):
+        """Raises DeltaError if no version has CDF enabled."""
+        dt_mock = MagicMock()
+        dt_mock.version.return_value = 3
+        dt_mock.load_cdf.side_effect = DeltaError(
+            "Reading a table version: 0 that does not have change data enabled"
+        )
+
+        reader = DeltaTableReader(auth)
+        with (
+            self._patch_reader(reader, dt_mock),
+            pytest.raises(DeltaError, match="does not have change data enabled"),
+        ):
+            await reader.find_cdf_start_version(
+                "ws", "LH.Lakehouse", "t", low=0, high=3
+            )
+
+    @pytest.mark.asyncio()
+    async def test_non_cdf_error_propagates(self, auth):
+        """Non-CDF errors are not swallowed by the binary search."""
+        dt_mock = MagicMock()
+        dt_mock.version.return_value = 5
+        dt_mock.load_cdf.side_effect = DeltaError("External error: storage unavailable")
+
+        reader = DeltaTableReader(auth)
+        with (
+            self._patch_reader(reader, dt_mock),
+            pytest.raises(DeltaError, match="storage unavailable"),
+        ):
+            await reader.find_cdf_start_version(
+                "ws", "LH.Lakehouse", "t", low=0, high=5
+            )
+
+
 # ── DeltaTableReader.list_files ─────────────────────────────────────────
 
 

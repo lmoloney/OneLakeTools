@@ -61,6 +61,23 @@ def _schema_to_columns(schema) -> list[Column]:
     return columns
 
 
+_CDF_NOT_ENABLED_FRAGMENTS = [
+    "does not have change data enabled",
+    "change data feed is not enabled",
+]
+
+
+def is_cdf_not_enabled_error(exc: BaseException) -> bool:
+    """Return True if *exc* indicates CDF is not enabled for a requested version.
+
+    delta-rs uses different wording depending on the code path, so we match
+    against multiple known message fragments.  Only this error should trigger
+    CDF retry/discovery logic — all other exceptions must propagate.
+    """
+    msg = str(exc).lower()
+    return any(frag in msg for frag in _CDF_NOT_ENABLED_FRAGMENTS)
+
+
 def _nullify_out_of_range(col, target_type):
     """Replace timestamps outside year 0001–9999 with null.
 
@@ -635,6 +652,56 @@ class DeltaTableReader:
             return cdf.read_all() if hasattr(cdf, "read_all") else cdf
 
         return await asyncio.to_thread(_load_cdf)
+
+    async def find_cdf_start_version(
+        self,
+        workspace: str,
+        item_path: str,
+        table_name: str,
+        *,
+        low: int = 0,
+        high: int | None = None,
+    ) -> int:
+        """Binary-search for the earliest version with CDF enabled.
+
+        Finds the first version in [low, high] where ``load_cdf`` succeeds.
+        This locates the start of the *current* contiguous CDF-enabled range —
+        if CDF was enabled, disabled, then re-enabled, this returns the start
+        of the latest enabled interval.
+
+        Raises the original ``DeltaError`` if no CDF-enabled version is found,
+        or if a non-CDF error occurs during the search.
+        """
+        uri = await self._resolve_uri(workspace, item_path, table_name)
+        dt = await asyncio.to_thread(self._load_table_sync, uri)
+
+        if high is None:
+            high = dt.version()
+
+        def _search():
+            lo, hi = low, high
+            result = -1
+            last_exc: BaseException | None = None
+
+            while lo <= hi:
+                mid = (lo + hi) // 2
+                try:
+                    cdf = dt.load_cdf(starting_version=mid, ending_version=mid)
+                    if hasattr(cdf, "read_all"):
+                        cdf.read_all()
+                    result = mid
+                    hi = mid - 1
+                except Exception as exc:
+                    if not is_cdf_not_enabled_error(exc):
+                        raise
+                    last_exc = exc
+                    lo = mid + 1
+
+            if result < 0:
+                raise last_exc  # type: ignore[misc]
+            return result
+
+        return await asyncio.to_thread(_search)
 
     async def list_files(self, workspace: str, item_path: str, table_name: str) -> list[str]:
         """List data files in a Delta table.

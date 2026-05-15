@@ -1120,3 +1120,229 @@ class TestCdfTabEmpty:
             )
         finally:
             await ctx.__aexit__(None, None, None)
+
+
+# ── CDF retry on tables where CDF was enabled after creation ───────
+
+
+class TestCdfRetryOnPartialEnable:
+    """CDF preview should auto-retry with latest version when initial load fails
+    because CDF was not enabled for early versions."""
+
+    @pytest.mark.asyncio
+    async def test_cdf_retry_succeeds_with_data(self):
+        """Auto-retry with latest version shows data + warning note."""
+        from deltalake.exceptions import DeltaError
+        from textual.widgets import Button
+
+        client = _make_mock_client()
+
+        call_count = 0
+
+        class _MockCdfResult:
+            column_names = ["_change_type", "id"]
+            num_rows = 2
+
+            def column(self, idx):
+                data = [["insert", "insert"], [1, 2]]
+                vals = []
+                for v in data[idx]:
+                    m = MagicMock()
+                    m.as_py.return_value = v
+                    vals.append(m)
+                return vals
+
+        async def _read_cdf_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if kwargs.get("starting_version", 0) < 5:
+                raise DeltaError(
+                    "External error: Reading a table version: 0 "
+                    "that does not have change data enabled"
+                )
+            return _MockCdfResult()
+
+        client.delta.read_cdf = AsyncMock(side_effect=_read_cdf_side_effect)
+
+        info = DeltaTableInfo(
+            name="holidays",
+            schema_=[Column(name="id", type="long")],
+            version=5,
+            num_files=1,
+            size_bytes=100,
+            properties={"delta.enableChangeDataFeed": "true"},
+        )
+        app, pilot, detail, ctx = await _setup_detail_with_metadata(client, info)
+        try:
+            try:
+                btn = detail.query_one("#load-cdf-preview", Button)
+                btn.press()
+            except Exception:
+                pass
+
+            await pilot.pause()
+            await asyncio.sleep(0.5)
+            await pilot.pause()
+            await pilot.pause()
+
+            cdf_pane = detail.query_one("#tab-cdf", TabPane)
+            statics = cdf_pane.query(Static)
+            texts = [_get_widget_text(w) for w in statics]
+
+            assert any("CDF was enabled after" in t for t in texts), (
+                f"Expected CDF partial-enable warning. Found: {texts}"
+            )
+            # Should have the "Search Earlier Versions" button
+            buttons = cdf_pane.query(Button)
+            button_ids = [b.id for b in buttons]
+            assert "search-cdf-range" in button_ids, (
+                f"Expected 'Search Earlier Versions' button. Found buttons: {button_ids}"
+            )
+            # Should have a DataTable with CDF data
+            tables = cdf_pane.query(DataTable)
+            assert len(tables) >= 1, "Expected CDF DataTable to be rendered"
+        finally:
+            await ctx.__aexit__(None, None, None)
+
+    @pytest.mark.asyncio
+    async def test_cdf_retry_succeeds_zero_rows(self):
+        """Auto-retry with 0 rows shows 'no change records' note."""
+        from deltalake.exceptions import DeltaError
+        from textual.widgets import Button
+
+        client = _make_mock_client()
+
+        class _EmptyCdf:
+            column_names = ["_change_type"]
+            num_rows = 0
+
+        async def _read_cdf_side_effect(*args, **kwargs):
+            if kwargs.get("starting_version", 0) < 5:
+                raise DeltaError(
+                    "Reading a table version: 0 "
+                    "that does not have change data enabled"
+                )
+            return _EmptyCdf()
+
+        client.delta.read_cdf = AsyncMock(side_effect=_read_cdf_side_effect)
+
+        info = DeltaTableInfo(
+            name="holidays",
+            schema_=[Column(name="id", type="long")],
+            version=5,
+            num_files=1,
+            size_bytes=100,
+            properties={"delta.enableChangeDataFeed": "true"},
+        )
+        app, pilot, detail, ctx = await _setup_detail_with_metadata(client, info)
+        try:
+            try:
+                btn = detail.query_one("#load-cdf-preview", Button)
+                btn.press()
+            except Exception:
+                pass
+
+            await pilot.pause()
+            await asyncio.sleep(0.5)
+            await pilot.pause()
+            await pilot.pause()
+
+            cdf_pane = detail.query_one("#tab-cdf", TabPane)
+            statics = cdf_pane.query(Static)
+            texts = [_get_widget_text(w) for w in statics]
+
+            assert any("no change records" in t.lower() for t in texts), (
+                f"Expected 'no change records' note. Found: {texts}"
+            )
+        finally:
+            await ctx.__aexit__(None, None, None)
+
+    @pytest.mark.asyncio
+    async def test_cdf_retry_also_fails(self):
+        """When even latest version fails with CDF-not-enabled, show clear error."""
+        from deltalake.exceptions import DeltaError
+        from textual.widgets import Button
+
+        client = _make_mock_client()
+        client.delta.read_cdf = AsyncMock(
+            side_effect=DeltaError(
+                "Reading a table version: 0 "
+                "that does not have change data enabled"
+            )
+        )
+
+        info = DeltaTableInfo(
+            name="holidays",
+            schema_=[Column(name="id", type="long")],
+            version=5,
+            num_files=1,
+            size_bytes=100,
+            properties={"delta.enableChangeDataFeed": "true"},
+        )
+        app, pilot, detail, ctx = await _setup_detail_with_metadata(client, info)
+        try:
+            try:
+                btn = detail.query_one("#load-cdf-preview", Button)
+                btn.press()
+            except Exception:
+                pass
+
+            await pilot.pause()
+            await asyncio.sleep(0.5)
+            await pilot.pause()
+            await pilot.pause()
+
+            cdf_pane = detail.query_one("#tab-cdf", TabPane)
+            statics = cdf_pane.query(Static)
+            texts = [_get_widget_text(w) for w in statics]
+
+            assert any("no readable CDF versions" in t for t in texts), (
+                f"Expected 'no readable CDF versions' message. Found: {texts}"
+            )
+        finally:
+            await ctx.__aexit__(None, None, None)
+
+    @pytest.mark.asyncio
+    async def test_non_cdf_error_not_caught(self):
+        """Non-CDF errors should display normally without retry."""
+        from textual.widgets import Button
+
+        client = _make_mock_client()
+        client.delta.read_cdf = AsyncMock(
+            side_effect=ConnectionError("Network unreachable")
+        )
+
+        info = DeltaTableInfo(
+            name="holidays",
+            schema_=[Column(name="id", type="long")],
+            version=5,
+            num_files=1,
+            size_bytes=100,
+            properties={"delta.enableChangeDataFeed": "true"},
+        )
+        app, pilot, detail, ctx = await _setup_detail_with_metadata(client, info)
+        try:
+            try:
+                btn = detail.query_one("#load-cdf-preview", Button)
+                btn.press()
+            except Exception:
+                pass
+
+            await pilot.pause()
+            await asyncio.sleep(0.5)
+            await pilot.pause()
+            await pilot.pause()
+
+            cdf_pane = detail.query_one("#tab-cdf", TabPane)
+            statics = cdf_pane.query(Static)
+            texts = [_get_widget_text(w) for w in statics]
+
+            assert any("CDF preview failed" in t for t in texts), (
+                f"Expected standard error message. Found: {texts}"
+            )
+            assert any("Network unreachable" in t for t in texts), (
+                f"Expected original error text. Found: {texts}"
+            )
+        finally:
+            await ctx.__aexit__(None, None, None)
+
