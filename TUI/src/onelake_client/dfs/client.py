@@ -9,6 +9,7 @@ import httpx
 
 from onelake_client._http import create_client, paginate_dfs, raise_for_status, request_with_retry
 from onelake_client.exceptions import (
+    ApiError,
     FileTooLargeError,
     NotFoundError,
 )
@@ -269,6 +270,67 @@ class DfsClient:
             on_auth_error=self._on_auth_error,
         )
         return _parse_file_properties(response)
+
+    async def read_file_range(
+        self,
+        workspace: str,
+        path: str,
+        *,
+        offset: int | None = None,
+        length: int | None = None,
+        suffix_length: int | None = None,
+    ) -> bytes:
+        """Read a byte range from a file in OneLake.
+
+        Exactly one range form must be specified:
+
+        - *suffix_length* alone → ``Range: bytes=-N`` (tail read)
+        - *offset* + *length* → ``Range: bytes=X-(X+length-1)``
+        - *offset* alone → ``Range: bytes=X-`` (offset to end)
+
+        Args:
+            workspace: Workspace name or GUID.
+            path: Full path within the workspace.
+            offset: Start byte offset.
+            length: Number of bytes to read (requires *offset*).
+            suffix_length: Read the last N bytes of the file.
+
+        Returns:
+            The requested byte range.
+
+        Raises:
+            ValueError: If parameters are missing or conflicting.
+            ApiError: If the server does not return 206 Partial Content.
+        """
+        if suffix_length is not None and (offset is not None or length is not None):
+            raise ValueError("suffix_length cannot be combined with offset or length")
+        if suffix_length is None and offset is None:
+            raise ValueError("At least one of offset or suffix_length must be provided")
+
+        if suffix_length is not None:
+            range_value = f"bytes=-{suffix_length}"
+        elif length is not None:
+            range_value = f"bytes={offset}-{offset + length - 1}"
+        else:
+            range_value = f"bytes={offset}-"
+
+        client = await self._get_client()
+        headers = _dfs_headers(await self._auth.dfs_headers_async())
+        headers["Range"] = range_value
+        url = f"{self._base_url}/{workspace}/{path}"
+
+        response = await request_with_retry(
+            client, "GET", url, headers=headers, on_auth_error=self._on_auth_error
+        )
+
+        if response.status_code != 206:
+            raise ApiError(
+                response.status_code,
+                message=f"Range request returned {response.status_code} instead of 206 — "
+                "server may not support Range requests for this endpoint",
+            )
+
+        return response.content
 
     async def exists(self, workspace: str, path: str) -> bool:
         """Check if a file or directory exists.

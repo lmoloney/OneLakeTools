@@ -269,6 +269,91 @@ async def test_list_paths_403_raises(httpx_mock, auth):
     await client.close()
 
 
+async def test_read_file_range_suffix(httpx_mock, auth):
+    """Suffix range sends Range: bytes=-N and returns partial content."""
+    url = f"{BASE_URL}/my-workspace/MyLakehouse.Lakehouse/Files/data.parquet"
+    httpx_mock.add_response(url=url, status_code=206, content=b"partial data")
+
+    client = DfsClient(auth)
+    result = await client.read_file_range(
+        "my-workspace", "MyLakehouse.Lakehouse/Files/data.parquet", suffix_length=1024
+    )
+
+    assert result == b"partial data"
+    req = httpx_mock.get_requests()[0]
+    assert req.headers["Range"] == "bytes=-1024"
+    await client.close()
+
+
+async def test_read_file_range_offset_length(httpx_mock, auth):
+    """Offset+length range sends Range: bytes=X-Y."""
+    url = f"{BASE_URL}/my-workspace/MyLakehouse.Lakehouse/Files/data.parquet"
+    httpx_mock.add_response(url=url, status_code=206, content=b"partial data")
+
+    client = DfsClient(auth)
+    result = await client.read_file_range(
+        "my-workspace", "MyLakehouse.Lakehouse/Files/data.parquet", offset=100, length=100
+    )
+
+    assert result == b"partial data"
+    req = httpx_mock.get_requests()[0]
+    assert req.headers["Range"] == "bytes=100-199"
+    await client.close()
+
+
+async def test_read_file_range_offset_only(httpx_mock, auth):
+    """Offset-only range sends Range: bytes=X-."""
+    url = f"{BASE_URL}/my-workspace/MyLakehouse.Lakehouse/Files/data.parquet"
+    httpx_mock.add_response(url=url, status_code=206, content=b"partial data")
+
+    client = DfsClient(auth)
+    result = await client.read_file_range(
+        "my-workspace", "MyLakehouse.Lakehouse/Files/data.parquet", offset=100
+    )
+
+    assert result == b"partial data"
+    req = httpx_mock.get_requests()[0]
+    assert req.headers["Range"] == "bytes=100-"
+    await client.close()
+
+
+async def test_read_file_range_rejects_200(httpx_mock, auth):
+    """Server returning 200 instead of 206 should raise ApiError."""
+    from onelake_client.exceptions import ApiError
+
+    url = f"{BASE_URL}/my-workspace/MyLakehouse.Lakehouse/Files/data.parquet"
+    httpx_mock.add_response(url=url, status_code=200, content=b"full file contents")
+
+    client = DfsClient(auth)
+    with pytest.raises(ApiError) as exc_info:
+        await client.read_file_range(
+            "my-workspace", "MyLakehouse.Lakehouse/Files/data.parquet", suffix_length=1024
+        )
+    assert exc_info.value.status_code == 200
+    await client.close()
+
+
+async def test_read_file_range_no_params(auth):
+    """Calling read_file_range with no range params raises ValueError."""
+    client = DfsClient(auth)
+    with pytest.raises(ValueError, match="At least one of"):
+        await client.read_file_range("my-workspace", "MyLakehouse.Lakehouse/Files/data.parquet")
+    await client.close()
+
+
+async def test_read_file_range_suffix_with_offset(auth):
+    """Combining suffix_length with offset raises ValueError."""
+    client = DfsClient(auth)
+    with pytest.raises(ValueError, match="suffix_length cannot be combined"):
+        await client.read_file_range(
+            "my-workspace",
+            "MyLakehouse.Lakehouse/Files/data.parquet",
+            suffix_length=1024,
+            offset=100,
+        )
+    await client.close()
+
+
 async def test_read_file_network_timeout(httpx_mock, auth):
     """Test that network timeout is handled during streaming."""
     import httpx
