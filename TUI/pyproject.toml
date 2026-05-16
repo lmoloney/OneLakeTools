@@ -28,6 +28,7 @@ dependencies = [
     "pyarrow>=14.0",
     "fastavro>=1.9",
     "textual>=1.0",
+    "tzdata; sys_platform == 'win32'",
 ]
 
 [project.scripts]

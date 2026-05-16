@@ -29,7 +29,7 @@ from textual.widgets import (
 
 from onelake_client import OneLakeClient
 from onelake_client.exceptions import FileTooLargeError
-from onelake_client.tables import coerce_timestamps
+from onelake_client.tables import coerce_timestamps, is_cdf_not_enabled_error
 from onelake_tui.nodes import FileNode, FolderNode, TableNode
 from onelake_tui.sprite import OneLakeSprite, get_welcome
 
@@ -417,32 +417,42 @@ class DetailPanel(VerticalScroll):
                         max_bytes=_MAX_DELTA_LOG_BYTES,
                     )
 
+                # Collect metaData configuration from the same log file
+                config_changes: dict[str, str] = {}
+                commit_lines: list[dict] = []
                 for line in raw.decode("utf-8", errors="replace").strip().splitlines():
                     line = line.strip()
                     if not line:
                         continue
                     try:
                         obj = json.loads(line)
-                        if "commitInfo" not in obj:
-                            continue
-                        ci = obj["commitInfo"]
-                        fname = path_info.name.split("/")[-1]
-                        version = fname.replace(".json", "").lstrip("0") or "0"
-                        # Prefer inCommitTimestamp (more accurate for
-                        # ICT-enabled tables)
-                        ts_raw = ci.get("inCommitTimestamp") or ci.get("timestamp")
-                        if ts_raw is None and path_info.last_modified:
-                            ts_raw = path_info.last_modified
-                        file_commits.append(
-                            {
-                                "version": version,
-                                "timestamp": ts_raw,
-                                "operation": ci.get("operation", ""),
-                                "metrics": ci.get("operationMetrics", {}),
-                            }
-                        )
                     except json.JSONDecodeError:
                         continue
+
+                    if "metaData" in obj:
+                        cfg = obj["metaData"].get("configuration", {})
+                        if cfg:
+                            config_changes = cfg
+
+                    if "commitInfo" in obj:
+                        commit_lines.append(obj)
+
+                for obj in commit_lines:
+                    ci = obj["commitInfo"]
+                    fname = path_info.name.split("/")[-1]
+                    version = fname.replace(".json", "").lstrip("0") or "0"
+                    ts_raw = ci.get("inCommitTimestamp") or ci.get("timestamp")
+                    if ts_raw is None and path_info.last_modified:
+                        ts_raw = path_info.last_modified
+                    file_commits.append(
+                        {
+                            "version": version,
+                            "timestamp": ts_raw,
+                            "operation": ci.get("operation", ""),
+                            "metrics": ci.get("operationMetrics", {}),
+                            "configuration": config_changes,
+                        }
+                    )
                 return file_commits
 
             results = await asyncio.gather(
@@ -465,7 +475,7 @@ class DetailPanel(VerticalScroll):
             if commits:
                 tbl = DataTable(id="txn-table")
                 await txn_pane.mount(tbl)
-                tbl.add_columns("Version", "Timestamp", "Operation", "Metrics")
+                tbl.add_columns("Version", "Timestamp", "Operation", "Details")
                 for c in commits:
                     ts = c["timestamp"]
                     if isinstance(ts, datetime):
@@ -480,7 +490,18 @@ class DetailPanel(VerticalScroll):
                     metrics_str = (
                         ", ".join(f"{k}={v}" for k, v in metrics.items()) if metrics else ""
                     )
-                    tbl.add_row(str(c["version"]), str(ts), c["operation"], metrics_str)
+                    config = c.get("configuration") or {}
+                    config_str = ", ".join(f"{k}={v}" for k, v in config.items()) if config else ""
+                    details_parts = [p for p in [metrics_str, config_str] if p]
+                    details = "\n".join(details_parts)
+                    row_height = len(details_parts) if len(details_parts) > 1 else 1
+                    tbl.add_row(
+                        str(c["version"]),
+                        str(ts),
+                        c["operation"],
+                        details,
+                        height=row_height,
+                    )
             else:
                 await txn_pane.mount(Static("[dim]No transaction history found[/dim]"))
         except Exception as e:
@@ -501,6 +522,8 @@ class DetailPanel(VerticalScroll):
             self._load_data_preview()
         elif event.button.id == "load-cdf-preview":
             self._load_cdf_preview()
+        elif event.button.id == "search-cdf-range":
+            self._search_cdf_range()
 
     @work(group="detail_aux", exclusive=True)
     async def _load_data_preview(self) -> None:
@@ -639,7 +662,13 @@ class DetailPanel(VerticalScroll):
 
     @work(group="detail_aux", exclusive=True)
     async def _load_cdf_preview(self) -> None:
-        """Load Change Data Feed records from the Delta table."""
+        """Load Change Data Feed records from the Delta table.
+
+        Strategy: start from the latest version (fast, always works regardless
+        of when CDF was enabled).  If the latest version returns 0 rows,
+        auto-expand to the last 10 versions.  Always offer a "Load Earlier
+        Versions" button for binary-search discovery of the full CDF range.
+        """
         table_data = self._current_table_data
         delta_info = self._current_delta_info
         if table_data is None or delta_info is None:
@@ -649,57 +678,214 @@ class DetailPanel(VerticalScroll):
             self.query_one("#load-cdf-preview", Button).remove()
 
         cdf_pane = self.query_one("#tab-cdf", TabPane)
-        # Clear placeholder content but keep the status line
         for child in list(cdf_pane.children):
             child.remove()
+
         await cdf_pane.mount(
-            Static("Loading CDF data…", id="cdf-loading", classes="detail-section")
+            Static(
+                f"Loading CDF data (version {delta_info.version})…",
+                id="cdf-loading",
+                classes="detail-section",
+            )
         )
 
         try:
-            starting = max(0, delta_info.version - 10)
+            # 1. Try latest version first
             cdf_table = await self.client.delta.read_cdf(
                 table_data.workspace,
                 table_data.item_path,
                 table_data.table_name,
-                starting_version=starting,
+                starting_version=delta_info.version,
             )
 
+            # 2. If 0 rows, auto-expand to last 10 versions
+            starting = delta_info.version
+            if cdf_table.num_rows == 0 and delta_info.version > 0:
+                expanded_start = max(0, delta_info.version - 10)
+                with contextlib.suppress(NoMatches):
+                    loading = self.query_one("#cdf-loading", Static)
+                    loading.update(
+                        f"No records at latest version — "
+                        f"expanding to versions {expanded_start}–{delta_info.version}…"
+                    )
+                try:
+                    cdf_table = await self.client.delta.read_cdf(
+                        table_data.workspace,
+                        table_data.item_path,
+                        table_data.table_name,
+                        starting_version=expanded_start,
+                    )
+                    starting = expanded_start
+                except Exception as expand_err:
+                    if is_cdf_not_enabled_error(expand_err):
+                        # CDF was enabled after creation — discover the
+                        # actual start within the expanded window
+                        try:
+                            discovered = await self.client.delta.find_cdf_start_version(
+                                table_data.workspace,
+                                table_data.item_path,
+                                table_data.table_name,
+                                low=expanded_start,
+                                high=delta_info.version,
+                            )
+                            cdf_table = await self.client.delta.read_cdf(
+                                table_data.workspace,
+                                table_data.item_path,
+                                table_data.table_name,
+                                starting_version=discovered,
+                            )
+                            starting = discovered
+                        except Exception:
+                            # Discovery failed — keep the latest-only result
+                            starting = delta_info.version
+                    else:
+                        raise
+
+            if self._current_table_data is not table_data:
+                return
+
+            await self._render_cdf_result(cdf_pane, cdf_table, starting, delta_info)
+        except Exception as e:
+            with contextlib.suppress(NoMatches):
+                self.query_one("#cdf-loading").remove()
+            if is_cdf_not_enabled_error(e):
+                await cdf_pane.mount(
+                    Static(
+                        "❌ CDF appears enabled in table properties "
+                        "but no readable CDF versions were found.",
+                        classes="detail-section",
+                    )
+                )
+            else:
+                await cdf_pane.mount(
+                    Static(
+                        f"❌ CDF preview failed: {esc(str(e))}",
+                        classes="detail-section",
+                    )
+                )
+            logger.debug("CDF preview failed: %s", e)
+
+    async def _render_cdf_result(self, cdf_pane, cdf_table, starting, delta_info):
+        """Render CDF data with a 'Load Earlier Versions' button."""
+        if self._current_table_data is None:
+            return
+
+        with contextlib.suppress(NoMatches):
+            self.query_one("#cdf-loading").remove()
+
+        # Always show the "Load Earlier Versions" button
+        await cdf_pane.mount(
+            Button(
+                "Load Earlier Versions",
+                id="search-cdf-range",
+                variant="default",
+            )
+        )
+
+        if cdf_table.num_rows == 0:
+            await cdf_pane.mount(
+                Static(
+                    "[dim]No CDF records found in recent versions.[/dim]",
+                    classes="detail-section",
+                )
+            )
+            return
+
+        version_label = (
+            f"version {starting}"
+            if starting == delta_info.version
+            else f"versions {starting}–{delta_info.version}"
+        )
+        await cdf_pane.mount(
+            Static(
+                f"[dim]Showing {min(cdf_table.num_rows, 100)} of {cdf_table.num_rows} "
+                f"CDF records ({version_label})[/dim]",
+                classes="detail-section",
+            )
+        )
+        await self._render_cdf_table(cdf_pane, cdf_table)
+
+    async def _render_cdf_table(self, pane, cdf_table):
+        """Mount a DataTable widget populated with CDF rows."""
+        tbl = DataTable(id="cdf-table")
+        await pane.mount(tbl)
+        col_names = cdf_table.column_names
+        tbl.add_columns(*col_names)
+        for row_idx in range(min(cdf_table.num_rows, 100)):
+            row = []
+            for c in range(len(col_names)):
+                val = cdf_table.column(c)[row_idx]
+                row.append(str(val.as_py() if hasattr(val, "as_py") else val))
+            tbl.add_row(*row)
+
+    @work(group="detail_aux", exclusive=True)
+    async def _search_cdf_range(self) -> None:
+        """Binary-search for the earliest CDF-enabled version, then re-render."""
+        table_data = self._current_table_data
+        delta_info = self._current_delta_info
+        if table_data is None or delta_info is None:
+            return
+
+        with contextlib.suppress(NoMatches):
+            self.query_one("#search-cdf-range", Button).remove()
+
+        cdf_pane = self.query_one("#tab-cdf", TabPane)
+        for child in list(cdf_pane.children):
+            child.remove()
+        await cdf_pane.mount(
+            Static(
+                "Searching for earliest CDF-enabled version — this may take a moment…",
+                id="cdf-loading",
+                classes="detail-section",
+            )
+        )
+
+        try:
+            start_ver = await self.client.delta.find_cdf_start_version(
+                table_data.workspace,
+                table_data.item_path,
+                table_data.table_name,
+                low=0,
+                high=delta_info.version,
+            )
+            if self._current_table_data is not table_data:
+                return
+
+            cdf_table = await self.client.delta.read_cdf(
+                table_data.workspace,
+                table_data.item_path,
+                table_data.table_name,
+                starting_version=start_ver,
+            )
             if self._current_table_data is not table_data:
                 return
 
             with contextlib.suppress(NoMatches):
                 self.query_one("#cdf-loading").remove()
 
-            if cdf_table.num_rows == 0:
-                await cdf_pane.mount(Static("[dim]No CDF records in the last 10 versions[/dim]"))
-                return
-
             await cdf_pane.mount(
                 Static(
-                    f"[dim]Showing {min(cdf_table.num_rows, 100)} of {cdf_table.num_rows} "
-                    f"CDF records (versions {starting}–{delta_info.version})[/dim]",
+                    f"[dim]CDF available from version {start_ver} "
+                    f"(table has {delta_info.version + 1} versions). "
+                    f"Showing {min(cdf_table.num_rows, 100)} of "
+                    f"{cdf_table.num_rows} records.[/dim]",
                     classes="detail-section",
                 )
             )
-            tbl = DataTable(id="cdf-table")
-            await cdf_pane.mount(tbl)
-            col_names = cdf_table.column_names
-            tbl.add_columns(*col_names)
-            for row_idx in range(min(cdf_table.num_rows, 100)):
-                row = []
-                for c in range(len(col_names)):
-                    val = cdf_table.column(c)[row_idx]
-                    # arro3 Scalars need .as_py() to get the Python value
-                    row.append(str(val.as_py() if hasattr(val, "as_py") else val))
-                tbl.add_row(*row)
+            if cdf_table.num_rows > 0:
+                await self._render_cdf_table(cdf_pane, cdf_table)
+            else:
+                await cdf_pane.mount(Static("[dim]No change records found in the CDF range.[/dim]"))
         except Exception as e:
             with contextlib.suppress(NoMatches):
                 self.query_one("#cdf-loading").remove()
             await cdf_pane.mount(
-                Static(f"❌ CDF preview failed: {esc(str(e))}", classes="detail-section")
+                Static(
+                    f"❌ CDF range search failed: {esc(str(e))}",
+                    classes="detail-section",
+                )
             )
-            logger.debug("CDF preview failed: %s", e)
+            logger.debug("CDF range search failed: %s", e)
 
     # ── File preview ────────────────────────────────────────────────────
 

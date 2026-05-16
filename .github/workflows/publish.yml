@@ -11,8 +11,11 @@ permissions:
 
 jobs:
   build:
-    name: Build distribution
-    runs-on: ubuntu-latest
+    name: Build distribution (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -36,6 +39,7 @@ jobs:
         run: cd TUI && uv build
 
       - name: Upload distribution artifacts
+        if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
         with:
           name: dist
