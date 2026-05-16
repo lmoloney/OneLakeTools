@@ -97,7 +97,12 @@ class OneLakeClient:
         self.auth = OneLakeAuth(credential, env=env)
         self.fabric = FabricClient(self.auth, env=env)
         self.dfs = DfsClient(self.auth, env=env)
-        self.delta = DeltaTableReader(self.auth, dfs_host=env.dfs_host, fabric_client=self.fabric)
+        self.delta = DeltaTableReader(
+            self.auth,
+            dfs_host=env.dfs_host,
+            fabric_client=self.fabric,
+            dfs_client=self.dfs,
+        )
         self.iceberg = IcebergTableReader(self.auth, env=env)
 
     async def close(self) -> None:

@@ -1,18 +1,31 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
+import struct
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from deltalake.exceptions import DeltaError
 
-from onelake_client.models.table import Column, DeltaTableInfo
+from onelake_client.models.table import (
+    Column,
+    ColumnChunkInfo,
+    ColumnInfo,
+    DeltaAnalysisResult,
+    DeltaAnalysisSummary,
+    DeltaTableInfo,
+    ParquetFileInfo,
+    RowGroupInfo,
+)
 
 if TYPE_CHECKING:
     import pyarrow as pa
 
     from onelake_client.auth import OneLakeAuth
+    from onelake_client.dfs.client import DfsClient
     from onelake_client.fabric import FabricClient
 
 logger = logging.getLogger("onelake_client.tables.delta")
@@ -44,6 +57,26 @@ def _build_table_uri(workspace: str, item_path: str, table_name: str, dfs_host: 
     return f"abfss://{workspace}@{dfs_host}/{item_path}/Tables/{table_name}"
 
 
+def _clean_type_str(type_str: str) -> str:
+    """Clean deltalake type string representations.
+
+    deltalake >= 1.0 returns PrimitiveType("string") instead of "string".
+    """
+    s = str(type_str)
+    if s.startswith("PrimitiveType("):
+        s = s.removeprefix("PrimitiveType(").removesuffix(")")
+        s = s.strip("\"'")
+    return s
+
+
+def _parse_dfs_path(uri: str) -> tuple[str, str]:
+    """Parse an abfss URI into (workspace_guid, dfs_path)."""
+    after_scheme = uri.split("://", 1)[1]  # ws-guid@host/path
+    account, rest = after_scheme.split("@", 1)  # ws-guid, host/path
+    _, path = rest.split("/", 1)  # host, path
+    return account, path
+
+
 def _schema_to_columns(schema) -> list[Column]:
     """Convert a deltalake Schema to our Column model."""
     columns: list[Column] = []
@@ -53,7 +86,7 @@ def _schema_to_columns(schema) -> list[Column]:
         columns.append(
             Column(
                 name=field.name,
-                type=str(field.type),
+                type=_clean_type_str(field.type),
                 nullable=field.nullable,
                 metadata=field.metadata if field.metadata else None,
             )
@@ -159,6 +192,13 @@ _METADATA_SCRIPT = """
 import sys, json
 from deltalake import DeltaTable
 
+def _clean_type(t):
+    s = str(t)
+    if s.startswith("PrimitiveType("):
+        s = s.removeprefix("PrimitiveType(").removesuffix(")")
+        s = s.strip("\\\"'")
+    return s
+
 data = json.load(sys.stdin)
 uri = data["uri"]
 storage_options = data["storage_options"]
@@ -171,7 +211,7 @@ try:
     columns = [
         {
             "name": f.name,
-            "type": str(f.type),
+            "type": _clean_type(f.type),
             "nullable": f.nullable,
             "metadata": dict(f.metadata) if f.metadata else None,
         }
@@ -344,10 +384,12 @@ class DeltaTableReader:
         auth: OneLakeAuth,
         dfs_host: str = "onelake.dfs.fabric.microsoft.com",
         fabric_client: FabricClient | None = None,
+        dfs_client: DfsClient | None = None,
     ):
         self._auth = auth
         self._dfs_host = dfs_host
         self._fabric = fabric_client
+        self._dfs = dfs_client
         self._isolate = True  # subprocess isolation for Rust panic safety
         self._guid_cache: dict[tuple[str, str], tuple[str, str]] = {}
 
@@ -718,3 +760,201 @@ class DeltaTableReader:
         uri = await self._resolve_uri(workspace, item_path, table_name)
         dt = await asyncio.to_thread(self._load_table_sync, uri)
         return dt.file_uris()
+
+    async def get_analysis(
+        self,
+        workspace: str,
+        item_path: str,
+        table_name: str,
+        *,
+        max_files: int = 20,
+        progress_callback: Callable[[int, int, str], Awaitable[None]] | None = None,
+    ) -> DeltaAnalysisResult:
+        """Analyse a Delta table by reading parquet footers via Range requests.
+
+        Reads the Parquet footer from each data file using suffix-range HTTP
+        requests, reconstructs the metadata in-memory, and aggregates row
+        group, column chunk, and column-level statistics.
+
+        Args:
+            workspace: Workspace name or GUID.
+            item_path: Item path like ``"MyLakehouse.Lakehouse"`` or GUID.
+            table_name: Table name under ``Tables/``.
+            max_files: Cap on how many data files to inspect.
+            progress_callback: Optional ``async (current, total, filename)``
+                callback for progress reporting.
+
+        Returns:
+            :class:`DeltaAnalysisResult` with summary, file, row-group,
+            column-chunk, and column-level views.
+        """
+        if self._dfs is None:
+            raise RuntimeError(
+                "DfsClient required for get_analysis() — pass dfs_client to constructor"
+            )
+
+        import pyarrow.parquet as pq
+
+        _PARQUET_MAGIC = b"PAR1"
+        _INITIAL_TAIL = 64 * 1024  # 64 KB
+
+        file_uris = await self.list_files(workspace, item_path, table_name)
+        files_skipped = max(0, len(file_uris) - max_files)
+        file_uris = file_uris[:max_files]
+
+        # Build physical→logical column name mapping from Delta schema metadata
+        phys_to_logical: dict[str, str] = {}
+        meta_info = await self.get_metadata(workspace, item_path, table_name)
+        for col in meta_info.schema_:
+            if col.metadata:
+                phys = col.metadata.get("delta.columnMapping.physicalName")
+                if phys is not None:
+                    phys_to_logical[str(phys)] = col.name
+
+        all_files: list[ParquetFileInfo] = []
+        all_row_groups: list[RowGroupInfo] = []
+        all_column_chunks: list[ColumnChunkInfo] = []
+        column_agg: dict[str, dict] = {}
+        total_rows = 0
+
+        for idx, uri in enumerate(file_uris):
+            ws_guid, file_path = _parse_dfs_path(uri)
+            file_name = file_path.split("/")[-1]
+
+            if progress_callback:
+                await progress_callback(idx + 1, len(file_uris), file_name)
+
+            # Tail read for parquet footer
+            tail = await self._dfs.read_file_range(
+                ws_guid, file_path, suffix_length=_INITIAL_TAIL
+            )
+
+            if len(tail) < 8 or tail[-4:] != _PARQUET_MAGIC:
+                logger.warning("Skipping %s — not a valid parquet file", file_name)
+                continue
+
+            footer_len = struct.unpack("<I", tail[-8:-4])[0]
+
+            if footer_len + 8 > len(tail):
+                tail = await self._dfs.read_file_range(
+                    ws_guid, file_path, suffix_length=footer_len + 8
+                )
+
+            footer_content = tail[-(footer_len + 8) : -8]
+
+            # Reconstruct a minimal in-memory parquet file (header + footer)
+            fake_buf = (
+                _PARQUET_MAGIC
+                + footer_content
+                + struct.pack("<I", footer_len)
+                + _PARQUET_MAGIC
+            )
+            pf = pq.ParquetFile(io.BytesIO(fake_buf))
+            metadata = pf.metadata
+
+            file_rows = metadata.num_rows
+            total_rows += file_rows
+
+            all_files.append(
+                ParquetFileInfo(
+                    file_name=file_name,
+                    row_count=file_rows,
+                    row_group_count=metadata.num_row_groups,
+                    created_by=metadata.created_by,
+                )
+            )
+
+            for rg_idx in range(metadata.num_row_groups):
+                rg = metadata.row_group(rg_idx)
+                compressed = sum(
+                    rg.column(c).total_compressed_size for c in range(rg.num_columns)
+                )
+                uncompressed = rg.total_byte_size
+                ratio = compressed / uncompressed if uncompressed > 0 else 0.0
+
+                all_row_groups.append(
+                    RowGroupInfo(
+                        file_name=file_name,
+                        row_group_id=rg_idx + 1,
+                        row_count=rg.num_rows,
+                        compressed_size=compressed,
+                        uncompressed_size=uncompressed,
+                        compression_ratio=ratio,
+                    )
+                )
+
+                for col_idx in range(rg.num_columns):
+                    cc = rg.column(col_idx)
+                    col_path = cc.path_in_schema
+                    col_name = phys_to_logical.get(col_path, col_path)
+
+                    all_column_chunks.append(
+                        ColumnChunkInfo(
+                            file_name=file_name,
+                            row_group_id=rg_idx + 1,
+                            column_id=col_idx + 1,
+                            column_name=col_name,
+                            physical_type=str(cc.physical_type),
+                            compressed_size=cc.total_compressed_size,
+                            uncompressed_size=cc.total_uncompressed_size,
+                            num_values=cc.num_values,
+                            dictionary_page_size=cc.dictionary_page_offset or 0,
+                            encodings=list(cc.encodings) if hasattr(cc, "encodings") else [],
+                        )
+                    )
+
+                    if col_name not in column_agg:
+                        column_agg[col_name] = {
+                            "compressed": 0,
+                            "uncompressed": 0,
+                            "col_idx": col_idx + 1,
+                        }
+                    column_agg[col_name]["compressed"] += cc.total_compressed_size
+                    column_agg[col_name]["uncompressed"] += cc.total_uncompressed_size
+
+        # Column-level aggregation
+        total_compressed = sum(v["compressed"] for v in column_agg.values())
+        columns: list[ColumnInfo] = []
+        for name, agg in column_agg.items():
+            columns.append(
+                ColumnInfo(
+                    column_id=agg["col_idx"],
+                    column_name=name,
+                    total_compressed_size=agg["compressed"],
+                    total_uncompressed_size=agg["uncompressed"],
+                    total_table_rows=total_rows,
+                    pct_of_table=(
+                        agg["compressed"] / total_compressed if total_compressed > 0 else 0.0
+                    ),
+                )
+            )
+
+        # Back-fill total_table_rows
+        for f in all_files:
+            f.total_table_rows = total_rows
+        for rg in all_row_groups:
+            rg.total_table_rows = total_rows
+
+        # Summary
+        rg_row_counts = [rg.row_count for rg in all_row_groups]
+        summary = DeltaAnalysisSummary(
+            total_rows=total_rows,
+            total_files=len(all_files),
+            total_row_groups=len(all_row_groups),
+            avg_rows_per_row_group=(
+                total_rows / len(all_row_groups) if all_row_groups else 0
+            ),
+            min_rows_per_row_group=min(rg_row_counts) if rg_row_counts else 0,
+            max_rows_per_row_group=max(rg_row_counts) if rg_row_counts else 0,
+            total_compressed_size=total_compressed,
+            total_uncompressed_size=sum(v["uncompressed"] for v in column_agg.values()),
+            files_skipped=files_skipped,
+        )
+
+        return DeltaAnalysisResult(
+            summary=summary,
+            files=all_files,
+            row_groups=all_row_groups,
+            column_chunks=all_column_chunks,
+            columns=columns,
+        )
