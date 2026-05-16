@@ -1031,10 +1031,11 @@ class DetailPanel(VerticalScroll):
             cc_table = DataTable()
             await pane.mount(cc_table)
             cc_table.add_columns(
-                "RG", "Col", "Name", "Type", "Compressed", "Uncompressed", "Values"
+                "File", "RG", "Col", "Name", "Type", "Compressed", "Uncompressed", "Values"
             )
             for cc in result.column_chunks:
                 cc_table.add_row(
+                    esc(cc.file_name),
                     str(cc.row_group_id),
                     str(cc.column_id),
                     esc(cc.column_name),
