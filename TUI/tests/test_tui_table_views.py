@@ -1335,3 +1335,315 @@ class TestCdfLatestFirst:
             )
         finally:
             await ctx.__aexit__(None, None, None)
+
+
+# ── Analysis tab tests ───────────────────────────────────────────────
+
+
+class TestAnalysisTab:
+    """Tests for the Analysis tab — lazy-loaded via 'Run Analysis' button."""
+
+    def _make_analysis_result(self):
+        from onelake_client.models.table import (
+            ColumnChunkInfo,
+            ColumnInfo,
+            DeltaAnalysisResult,
+            DeltaAnalysisSummary,
+            ParquetFileInfo,
+            RowGroupInfo,
+        )
+
+        return DeltaAnalysisResult(
+            summary=DeltaAnalysisSummary(
+                total_rows=100,
+                total_files=2,
+                total_row_groups=2,
+                avg_rows_per_row_group=50.0,
+                min_rows_per_row_group=40,
+                max_rows_per_row_group=60,
+                total_compressed_size=2048,
+                total_uncompressed_size=4096,
+                files_skipped=0,
+            ),
+            files=[
+                ParquetFileInfo(
+                    file_name="part-00000.parquet",
+                    row_count=60,
+                    row_group_count=1,
+                    total_table_rows=100,
+                    created_by="test-writer",
+                ),
+                ParquetFileInfo(
+                    file_name="part-00001.parquet",
+                    row_count=40,
+                    row_group_count=1,
+                    total_table_rows=100,
+                    created_by="test-writer",
+                ),
+            ],
+            row_groups=[
+                RowGroupInfo(
+                    file_name="part-00000.parquet",
+                    row_group_id=1,
+                    row_count=60,
+                    total_table_rows=100,
+                    compressed_size=1200,
+                    uncompressed_size=2400,
+                    compression_ratio=0.5,
+                ),
+                RowGroupInfo(
+                    file_name="part-00001.parquet",
+                    row_group_id=1,
+                    row_count=40,
+                    total_table_rows=100,
+                    compressed_size=848,
+                    uncompressed_size=1696,
+                    compression_ratio=0.5,
+                ),
+            ],
+            column_chunks=[
+                ColumnChunkInfo(
+                    file_name="part-00000.parquet",
+                    row_group_id=1,
+                    column_id=1,
+                    column_name="id",
+                    physical_type="INT32",
+                    compressed_size=600,
+                    uncompressed_size=1200,
+                    num_values=60,
+                ),
+                ColumnChunkInfo(
+                    file_name="part-00000.parquet",
+                    row_group_id=1,
+                    column_id=2,
+                    column_name="name",
+                    physical_type="BYTE_ARRAY",
+                    compressed_size=600,
+                    uncompressed_size=1200,
+                    num_values=60,
+                ),
+                ColumnChunkInfo(
+                    file_name="part-00001.parquet",
+                    row_group_id=1,
+                    column_id=1,
+                    column_name="id",
+                    physical_type="INT32",
+                    compressed_size=424,
+                    uncompressed_size=848,
+                    num_values=40,
+                ),
+                ColumnChunkInfo(
+                    file_name="part-00001.parquet",
+                    row_group_id=1,
+                    column_id=2,
+                    column_name="name",
+                    physical_type="BYTE_ARRAY",
+                    compressed_size=424,
+                    uncompressed_size=848,
+                    num_values=40,
+                ),
+            ],
+            columns=[
+                ColumnInfo(
+                    column_id=1,
+                    column_name="id",
+                    total_compressed_size=1024,
+                    total_uncompressed_size=2048,
+                    total_table_rows=100,
+                    pct_of_table=0.5,
+                ),
+                ColumnInfo(
+                    column_id=2,
+                    column_name="name",
+                    total_compressed_size=1024,
+                    total_uncompressed_size=2048,
+                    total_table_rows=100,
+                    pct_of_table=0.5,
+                ),
+            ],
+        )
+
+    @pytest.mark.asyncio
+    async def test_analysis_tab_has_run_button(self):
+        """Analysis tab should show a 'Run Analysis' button initially."""
+        from textual.widgets import Button
+
+        client = _make_mock_client()
+        info = DeltaTableInfo(
+            name="test",
+            schema_=[Column(name="id", type="long")],
+            version=0,
+            num_files=1,
+            size_bytes=100,
+        )
+        app, pilot, detail, ctx = await _setup_detail_with_metadata(client, info)
+        try:
+            pane = detail.query_one("#tab-analysis", TabPane)
+            assert pane is not None
+            btn = detail.query_one("#run-analysis", Button)
+            assert btn is not None
+        finally:
+            await ctx.__aexit__(None, None, None)
+
+    @pytest.mark.asyncio
+    async def test_analysis_renders_data_tables(self):
+        """Clicking Run Analysis should render DataTable sections."""
+        from textual.widgets import Button, Label
+
+        client = _make_mock_client()
+        client.delta.get_analysis = AsyncMock(return_value=self._make_analysis_result())
+
+        info = DeltaTableInfo(
+            name="test",
+            schema_=[
+                Column(name="id", type="long"),
+                Column(name="name", type="string"),
+            ],
+            version=0,
+            num_files=2,
+            size_bytes=4096,
+        )
+        app, pilot, detail, ctx = await _setup_detail_with_metadata(client, info)
+        try:
+            btn = detail.query_one("#run-analysis", Button)
+            btn.press()
+            await pilot.pause()
+            await asyncio.sleep(0.5)
+            await pilot.pause()
+            await pilot.pause()
+
+            pane = detail.query_one("#tab-analysis", TabPane)
+            tables = pane.query(DataTable)
+            assert len(tables) == 4, (
+                f"Expected 4 DataTables (Files, Row Groups, Column Chunks, Columns). "
+                f"Found {len(tables)}"
+            )
+
+            labels = pane.query(Label)
+            label_texts = [str(label.render()) for label in labels]
+            assert any("Summary" in t for t in label_texts)
+            assert any("Parquet Files" in t for t in label_texts)
+        finally:
+            await ctx.__aexit__(None, None, None)
+
+    @pytest.mark.asyncio
+    async def test_analysis_files_table_row_count(self):
+        """Files DataTable should have one row per file."""
+        from textual.widgets import Button
+
+        client = _make_mock_client()
+        client.delta.get_analysis = AsyncMock(return_value=self._make_analysis_result())
+
+        info = DeltaTableInfo(
+            name="test",
+            schema_=[Column(name="id", type="long")],
+            version=0,
+            num_files=2,
+            size_bytes=4096,
+        )
+        app, pilot, detail, ctx = await _setup_detail_with_metadata(client, info)
+        try:
+            btn = detail.query_one("#run-analysis", Button)
+            btn.press()
+            await pilot.pause()
+            await asyncio.sleep(0.5)
+            await pilot.pause()
+
+            pane = detail.query_one("#tab-analysis", TabPane)
+            tables = pane.query(DataTable)
+            files_table = tables[0]
+            assert files_table.row_count == 2
+        finally:
+            await ctx.__aexit__(None, None, None)
+
+    @pytest.mark.asyncio
+    async def test_analysis_error_no_tables_rendered(self):
+        """Analysis error should not render DataTables."""
+        from textual.widgets import Button
+
+        client = _make_mock_client()
+        client.delta.get_analysis = AsyncMock(
+            side_effect=Exception("Connection timeout [bold]injected[/bold]")
+        )
+
+        info = DeltaTableInfo(
+            name="test",
+            schema_=[Column(name="id", type="long")],
+            version=0,
+            num_files=1,
+            size_bytes=100,
+        )
+        app, pilot, detail, ctx = await _setup_detail_with_metadata(client, info)
+        try:
+            btn = detail.query_one("#run-analysis", Button)
+            btn.press()
+            await pilot.pause()
+            await asyncio.sleep(0.5)
+            await pilot.pause()
+
+            pane = detail.query_one("#tab-analysis", TabPane)
+            tables = pane.query(DataTable)
+            assert len(tables) == 0
+        finally:
+            await ctx.__aexit__(None, None, None)
+
+    @pytest.mark.asyncio
+    async def test_analysis_button_removed_after_click(self):
+        """Run Analysis button should be removed once clicked."""
+        from textual.css.query import NoMatches
+        from textual.widgets import Button
+
+        client = _make_mock_client()
+        client.delta.get_analysis = AsyncMock(return_value=self._make_analysis_result())
+
+        info = DeltaTableInfo(
+            name="test",
+            schema_=[Column(name="id", type="long")],
+            version=0,
+            num_files=1,
+            size_bytes=100,
+        )
+        app, pilot, detail, ctx = await _setup_detail_with_metadata(client, info)
+        try:
+            btn = detail.query_one("#run-analysis", Button)
+            btn.press()
+            await pilot.pause()
+            await asyncio.sleep(0.5)
+            await pilot.pause()
+
+            with pytest.raises(NoMatches):
+                detail.query_one("#run-analysis", Button)
+        finally:
+            await ctx.__aexit__(None, None, None)
+
+    @pytest.mark.asyncio
+    async def test_analysis_summary_shows_row_count(self):
+        """Summary section should display the total row count."""
+        from textual.widgets import Button
+
+        client = _make_mock_client()
+        client.delta.get_analysis = AsyncMock(return_value=self._make_analysis_result())
+
+        info = DeltaTableInfo(
+            name="test",
+            schema_=[Column(name="id", type="long")],
+            version=0,
+            num_files=2,
+            size_bytes=4096,
+        )
+        app, pilot, detail, ctx = await _setup_detail_with_metadata(client, info)
+        try:
+            btn = detail.query_one("#run-analysis", Button)
+            btn.press()
+            await pilot.pause()
+            await asyncio.sleep(0.5)
+            await pilot.pause()
+
+            pane = detail.query_one("#tab-analysis", TabPane)
+            statics = pane.query(Static)
+            texts = [_get_widget_text(w) for w in statics]
+            assert any("100" in t for t in texts), (
+                f"Expected '100' (total rows) in summary. Found: {texts}"
+            )
+        finally:
+            await ctx.__aexit__(None, None, None)
