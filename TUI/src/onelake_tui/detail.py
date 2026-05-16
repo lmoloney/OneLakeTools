@@ -1004,9 +1004,7 @@ class DetailPanel(VerticalScroll):
         # ── Summary ─────────────────────────────────────────────────
         await pane.mount(Label("Summary", classes="detail-title"))
         skipped_text = (
-            f"  [yellow]({s.files_skipped} files skipped)[/yellow]"
-            if s.files_skipped
-            else ""
+            f"  [yellow]({s.files_skipped} files skipped)[/yellow]" if s.files_skipped else ""
         )
         await pane.mount(
             Static(
@@ -1056,9 +1054,7 @@ class DetailPanel(VerticalScroll):
             await pane.mount(Label("Row Groups", classes="detail-title"))
             rg_table = DataTable()
             await pane.mount(rg_table)
-            rg_table.add_columns(
-                "RG", "File", "Rows", "Compressed", "Uncompressed", "Ratio"
-            )
+            rg_table.add_columns("RG", "File", "Rows", "Compressed", "Uncompressed", "Ratio")
             for rg in result.row_groups:
                 rg_table.add_row(
                     str(rg.row_group_id),
@@ -1094,9 +1090,7 @@ class DetailPanel(VerticalScroll):
             await pane.mount(Label("Columns", classes="detail-title"))
             col_table = DataTable()
             await pane.mount(col_table)
-            col_table.add_columns(
-                "Col", "Name", "Compressed", "Uncompressed", "% of Table"
-            )
+            col_table.add_columns("Col", "Name", "Compressed", "Uncompressed", "% of Table")
             for c in result.columns:
                 col_table.add_row(
                     str(c.column_id),
@@ -1139,17 +1133,13 @@ class DetailPanel(VerticalScroll):
             await analysis_pane.mount(
                 Button("← Back to Overview", id="analysis-back-overview", variant="default")
             )
-            await analysis_pane.mount(
-                Label(f"📄 {file_name}", classes="detail-title")
-            )
+            await analysis_pane.mount(Label(f"📄 {file_name}", classes="detail-title"))
             await self._render_analysis_in_pane(analysis_pane, result)
 
         except Exception as e:
             for child in list(analysis_pane.children):
                 child.remove()
-            self.notify(
-                f"File analysis failed: {e}", severity="error", markup=False
-            )
+            self.notify(f"File analysis failed: {e}", severity="error", markup=False)
             await analysis_pane.mount(
                 Button("← Back to Overview", id="analysis-back-overview", variant="default")
             )
@@ -1159,8 +1149,7 @@ class DetailPanel(VerticalScroll):
         s = result.summary
         await pane.mount(
             Static(
-                f"[b]Rows:[/b] {s.total_rows:,}  "
-                f"[b]Row Groups:[/b] {s.total_row_groups}",
+                f"[b]Rows:[/b] {s.total_rows:,}  [b]Row Groups:[/b] {s.total_row_groups}",
                 classes="detail-section",
             )
         )
@@ -1183,9 +1172,7 @@ class DetailPanel(VerticalScroll):
             await pane.mount(Label("Row Groups", classes="detail-title"))
             rg_table = DataTable()
             await pane.mount(rg_table)
-            rg_table.add_columns(
-                "RG", "Rows", "Compressed", "Uncompressed", "Ratio"
-            )
+            rg_table.add_columns("RG", "Rows", "Compressed", "Uncompressed", "Ratio")
             for rg in result.row_groups:
                 rg_table.add_row(
                     str(rg.row_group_id),
@@ -1199,9 +1186,7 @@ class DetailPanel(VerticalScroll):
             await pane.mount(Label("Columns", classes="detail-title"))
             col_table = DataTable()
             await pane.mount(col_table)
-            col_table.add_columns(
-                "Col", "Name", "Type", "Compressed", "Uncompressed", "% of File"
-            )
+            col_table.add_columns("Col", "Name", "Type", "Compressed", "Uncompressed", "% of File")
             col_types: dict[str, str] = {}
             for cc in result.column_chunks:
                 if cc.column_name not in col_types:
@@ -1282,8 +1267,7 @@ class DetailPanel(VerticalScroll):
         self.mount(Label("Analysis", classes="detail-title"))
         self.mount(
             Static(
-                f"[b]Rows:[/b] {s.total_rows:,}  "
-                f"[b]Row Groups:[/b] {s.total_row_groups}",
+                f"[b]Rows:[/b] {s.total_rows:,}  [b]Row Groups:[/b] {s.total_row_groups}",
                 classes="detail-section",
             )
         )
@@ -1321,9 +1305,7 @@ class DetailPanel(VerticalScroll):
             self.mount(Label("Columns", classes="detail-title"))
             col_table = DataTable()
             self.mount(col_table)
-            col_table.add_columns(
-                "Col", "Name", "Type", "Compressed", "Uncompressed", "% of File"
-            )
+            col_table.add_columns("Col", "Name", "Type", "Compressed", "Uncompressed", "% of File")
             # Get type from column chunks (first occurrence of each column)
             col_types: dict[str, str] = {}
             for cc in result.column_chunks:
@@ -1487,9 +1469,7 @@ class DetailPanel(VerticalScroll):
             schema_table.add_columns("Column", "Type", "Nullable")
             for i in range(len(schema)):
                 field = schema.field(i)
-                schema_table.add_row(
-                    field.name, str(field.type), "✓" if field.nullable else "✗"
-                )
+                schema_table.add_row(field.name, str(field.type), "✓" if field.nullable else "✗")
 
             # ── Data tab ────────────────────────────────────────────
             data_pane = TabPane("Data", id="pq-tab-data")
@@ -1500,9 +1480,7 @@ class DetailPanel(VerticalScroll):
             col_names = [schema.field(i).name for i in range(len(schema))]
             data_table.add_columns(*col_names)
             for row_idx in range(sample.num_rows):
-                row_vals = [
-                    str(sample.column(c)[row_idx]) for c in range(len(col_names))
-                ]
+                row_vals = [str(sample.column(c)[row_idx]) for c in range(len(col_names))]
                 data_table.add_row(*row_vals)
             if sample.num_rows >= 100:
                 await data_pane.mount(
@@ -1521,8 +1499,7 @@ class DetailPanel(VerticalScroll):
             )
             await analysis_pane.mount(
                 Static(
-                    "[dim]Analyses row groups, column chunks, "
-                    "and compression statistics[/dim]",
+                    "[dim]Analyses row groups, column chunks, and compression statistics[/dim]",
                     classes="detail-section",
                 )
             )

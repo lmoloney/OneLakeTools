@@ -40,9 +40,7 @@ def mock_dfs():
 @pytest.fixture
 def reader(mock_dfs):
     auth = MagicMock()
-    r = DeltaTableReader(
-        auth, dfs_host=_DFS_HOST, dfs_client=mock_dfs
-    )
+    r = DeltaTableReader(auth, dfs_host=_DFS_HOST, dfs_client=mock_dfs)
     r._isolate = False
     return r
 
@@ -208,9 +206,7 @@ async def test_get_analysis_max_files(reader, mock_dfs):
         mock_meta.return_value = _default_metadata()
         mock_dfs.read_file_range.return_value = parquet_bytes
 
-        result = await reader.get_analysis(
-            _WS_GUID, "item-guid", "mytable", max_files=5
-        )
+        result = await reader.get_analysis(_WS_GUID, "item-guid", "mytable", max_files=5)
 
     assert result.summary.files_skipped == 25
     assert result.summary.total_files == 5
@@ -237,9 +233,7 @@ async def test_get_analysis_progress_callback(reader, mock_dfs):
         mock_meta.return_value = _default_metadata()
         mock_dfs.read_file_range.return_value = parquet_bytes
 
-        await reader.get_analysis(
-            _WS_GUID, "item-guid", "mytable", progress_callback=on_progress
-        )
+        await reader.get_analysis(_WS_GUID, "item-guid", "mytable", progress_callback=on_progress)
 
     assert len(calls) == 3
     assert calls[0] == (1, 3, "part-00000.parquet")

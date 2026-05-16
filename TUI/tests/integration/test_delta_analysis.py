@@ -42,9 +42,7 @@ _MAY_FAIL_TABLES = {"deletion_vector_demo"}
 @pytest.mark.parametrize("table_name", _SIMPLE_TABLES)
 async def test_analysis_smoke(client, workspace_id, lakehouse_id, table_name):
     """Every simple lakehouse table should produce a valid analysis result."""
-    result = await client.delta.get_analysis(
-        workspace_id, lakehouse_id, table_name, max_files=5
-    )
+    result = await client.delta.get_analysis(workspace_id, lakehouse_id, table_name, max_files=5)
     s = result.summary
     assert s.total_files > 0
     assert s.total_rows >= 0
@@ -126,9 +124,7 @@ class TestPartitionedAnalysis:
 class TestLargeTableAnalysis:
     """Large table (9.9M rows) — test with max_files=1 to limit network."""
 
-    async def test_analysis_with_max_files_cap(
-        self, client, workspace_id, lakehouse_id
-    ):
+    async def test_analysis_with_max_files_cap(self, client, workspace_id, lakehouse_id):
         result = await client.delta.get_analysis(
             workspace_id, lakehouse_id, "large_customers", max_files=1
         )
@@ -153,8 +149,7 @@ class TestColumnMappingAnalysis:
         # Should have human-readable names, not UUIDs
         for name in col_names:
             assert len(name) < 36 or "-" not in name, (
-                f"Column '{name}' looks like a physical GUID"
-                " — mapping may have failed"
+                f"Column '{name}' looks like a physical GUID — mapping may have failed"
             )
         # Expected logical names
         for expected in ("user_id", "email", "rating"):
@@ -164,9 +159,7 @@ class TestColumnMappingAnalysis:
 class TestDeletionVectorAnalysis:
     """Tables with deletion vectors (reader v3) may or may not work."""
 
-    async def test_analysis_does_not_crash(
-        self, client, workspace_id, lakehouse_id
-    ):
+    async def test_analysis_does_not_crash(self, client, workspace_id, lakehouse_id):
         """Deletion vector tables should either produce results or raise DeltaError."""
         from deltalake.exceptions import DeltaError
 
@@ -177,9 +170,7 @@ class TestDeletionVectorAnalysis:
             # If it succeeds, verify basic structure
             assert result.summary.total_files >= 0
         except DeltaError:
-            pytest.skip(
-                "DeltaError on deletion_vector_demo — expected with reader v3"
-            )
+            pytest.skip("DeltaError on deletion_vector_demo — expected with reader v3")
 
 
 # ── Part 3: Progress callback ──────────────────────────────────────────

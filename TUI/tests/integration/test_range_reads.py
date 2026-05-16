@@ -27,9 +27,7 @@ async def test_suffix_range_read(client, workspace_id, lakehouse_id):
 async def test_suffix_range_larger_than_file(client, workspace_id, lakehouse_id):
     """Suffix larger than file should return full file content."""
     # Read a small file with a large suffix — should get full file
-    full = await client.dfs.read_file(
-        workspace_id, f"{lakehouse_id}/Files/sample.csv"
-    )
+    full = await client.dfs.read_file(workspace_id, f"{lakehouse_id}/Files/sample.csv")
     tail = await client.dfs.read_file_range(
         workspace_id,
         f"{lakehouse_id}/Files/sample.csv",

@@ -100,12 +100,7 @@ def _parse_parquet_footer(raw_bytes: bytes):
         return None
 
     footer_content = raw_bytes[-(footer_len + 8) : -8]
-    fake_buf = (
-        _PARQUET_MAGIC
-        + footer_content
-        + struct.pack("<I", footer_len)
-        + _PARQUET_MAGIC
-    )
+    fake_buf = _PARQUET_MAGIC + footer_content + struct.pack("<I", footer_len) + _PARQUET_MAGIC
     pf = pq.ParquetFile(io.BytesIO(fake_buf))
     return pf.metadata
 
@@ -142,9 +137,7 @@ def _extract_file_stats(
 
     for rg_idx in range(metadata.num_row_groups):
         rg = metadata.row_group(rg_idx)
-        compressed = sum(
-            rg.column(c).total_compressed_size for c in range(rg.num_columns)
-        )
+        compressed = sum(rg.column(c).total_compressed_size for c in range(rg.num_columns))
         uncompressed = rg.total_byte_size
         ratio = compressed / uncompressed if uncompressed > 0 else 0.0
 
@@ -228,9 +221,7 @@ def _build_analysis_result(
         total_rows=total_rows,
         total_files=len(all_files),
         total_row_groups=len(all_row_groups),
-        avg_rows_per_row_group=(
-            total_rows / len(all_row_groups) if all_row_groups else 0
-        ),
+        avg_rows_per_row_group=(total_rows / len(all_row_groups) if all_row_groups else 0),
         min_rows_per_row_group=min(rg_row_counts) if rg_row_counts else 0,
         max_rows_per_row_group=max(rg_row_counts) if rg_row_counts else 0,
         total_compressed_size=total_compressed,
@@ -993,9 +984,7 @@ class DeltaTableReader:
             if progress_callback:
                 await progress_callback(idx + 1, len(file_uris), file_name)
 
-            tail = await self._dfs.read_file_range(
-                ws_guid, file_path, suffix_length=_INITIAL_TAIL
-            )
+            tail = await self._dfs.read_file_range(ws_guid, file_path, suffix_length=_INITIAL_TAIL)
 
             metadata = _parse_parquet_footer(tail)
             if metadata is None and len(tail) >= 8 and tail[-4:] == _PARQUET_MAGIC:
@@ -1010,9 +999,7 @@ class DeltaTableReader:
                 logger.warning("Skipping %s — not a valid parquet file", file_name)
                 continue
 
-            fi, rgs, ccs, col_agg = _extract_file_stats(
-                metadata, file_name, phys_to_logical
-            )
+            fi, rgs, ccs, col_agg = _extract_file_stats(metadata, file_name, phys_to_logical)
             all_files.append(fi)
             all_row_groups.extend(rgs)
             all_column_chunks.extend(ccs)
@@ -1027,8 +1014,12 @@ class DeltaTableReader:
                 column_agg[name]["uncompressed"] += agg["uncompressed"]
 
         return _build_analysis_result(
-            all_files, all_row_groups, all_column_chunks, column_agg,
-            files_skipped, file_paths,
+            all_files,
+            all_row_groups,
+            all_column_chunks,
+            column_agg,
+            files_skipped,
+            file_paths,
         )
 
     async def analyze_parquet_file(
@@ -1051,22 +1042,17 @@ class DeltaTableReader:
         """
         if self._dfs is None:
             raise RuntimeError(
-                "DfsClient required for analyze_parquet_file() — "
-                "pass dfs_client to constructor"
+                "DfsClient required for analyze_parquet_file() — pass dfs_client to constructor"
             )
 
         _INITIAL_TAIL = 64 * 1024
 
-        raw = await self._dfs.read_file_range(
-            workspace, path, suffix_length=_INITIAL_TAIL
-        )
+        raw = await self._dfs.read_file_range(workspace, path, suffix_length=_INITIAL_TAIL)
 
         metadata = _parse_parquet_footer(raw)
         if metadata is None and len(raw) >= 8 and raw[-4:] == _PARQUET_MAGIC:
             footer_len = struct.unpack("<I", raw[-8:-4])[0]
-            raw = await self._dfs.read_file_range(
-                workspace, path, suffix_length=footer_len + 8
-            )
+            raw = await self._dfs.read_file_range(workspace, path, suffix_length=footer_len + 8)
             metadata = _parse_parquet_footer(raw)
 
         if metadata is None:

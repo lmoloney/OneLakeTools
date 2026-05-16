@@ -44,14 +44,10 @@ def schema_tables(lakehouse_schema_item):
         "analytics/user_activity",
     ],
 )
-async def test_schema_table_analysis(
-    client, workspace_id, lakehouse_schema_item, table_name
-):
+async def test_schema_table_analysis(client, workspace_id, lakehouse_schema_item, table_name):
     """Schema-qualified tables should produce valid analysis results."""
     lh_id = _lakehouse_id(lakehouse_schema_item)
-    result = await client.delta.get_analysis(
-        workspace_id, lh_id, table_name, max_files=5
-    )
+    result = await client.delta.get_analysis(workspace_id, lh_id, table_name, max_files=5)
     s = result.summary
     assert s.total_files > 0, f"{table_name}: no files found"
     assert s.total_rows >= 0
@@ -60,9 +56,7 @@ async def test_schema_table_analysis(
     assert len(result.columns) > 0
 
 
-async def test_schema_table_row_counts_consistent(
-    client, workspace_id, lakehouse_schema_item
-):
+async def test_schema_table_row_counts_consistent(client, workspace_id, lakehouse_schema_item):
     """File row counts should sum to total for a schema table."""
     lh_id = _lakehouse_id(lakehouse_schema_item)
     result = await client.delta.get_analysis(
@@ -72,9 +66,7 @@ async def test_schema_table_row_counts_consistent(
     assert file_rows == result.summary.total_rows
 
 
-async def test_schema_table_column_chunks_complete(
-    client, workspace_id, lakehouse_schema_item
-):
+async def test_schema_table_column_chunks_complete(client, workspace_id, lakehouse_schema_item):
     """Column chunks should cover columns × row groups."""
     lh_id = _lakehouse_id(lakehouse_schema_item)
     result = await client.delta.get_analysis(
@@ -84,13 +76,9 @@ async def test_schema_table_column_chunks_complete(
     assert len(result.column_chunks) == expected
 
 
-async def test_schema_table_compression_ratios(
-    client, workspace_id, lakehouse_schema_item
-):
+async def test_schema_table_compression_ratios(client, workspace_id, lakehouse_schema_item):
     """Compression ratios should be non-negative (can exceed 1.0 for tiny files)."""
     lh_id = _lakehouse_id(lakehouse_schema_item)
-    result = await client.delta.get_analysis(
-        workspace_id, lh_id, "dbo/products", max_files=10
-    )
+    result = await client.delta.get_analysis(workspace_id, lh_id, "dbo/products", max_files=10)
     for rg in result.row_groups:
         assert rg.compression_ratio >= 0
