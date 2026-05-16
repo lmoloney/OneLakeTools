@@ -108,6 +108,7 @@ class DetailPanel(VerticalScroll):
         self._current_file_data: FileNode | None = None
         self._current_delta_info = None
         self._analysis_file_paths: dict[str, tuple[str, str]] = {}
+        self._analysis_result = None
         self._data_preview_loaded: bool = False
         self._debounce_timer = None
         self._pending_node: NodeData = None
@@ -147,6 +148,7 @@ class DetailPanel(VerticalScroll):
         self._current_file_data = None
         self._current_delta_info = None
         self._analysis_file_paths = {}
+        self._analysis_result = None
         self._data_preview_loaded = False
         self.remove_children()
 
@@ -194,17 +196,6 @@ class DetailPanel(VerticalScroll):
                 )
         except Exception as e:
             logger.debug("Could not load file properties: %s", e)
-
-        # Offer parquet analysis for .parquet files
-        file_name = data.path.split("/")[-1]
-        if file_name.endswith(".parquet"):
-            self.mount(
-                Button(
-                    "Analyze Parquet",
-                    id="analyze-parquet-file",
-                    variant="primary",
-                )
-            )
 
     # ── Delta table tabbed view ─────────────────────────────────────────
 
@@ -388,7 +379,7 @@ class DetailPanel(VerticalScroll):
             )
             await analysis_pane.mount(
                 Static(
-                    "[dim]Reads parquet file footers from OneLake "
+                    "[dim]Reads parquet file metadata from OneLake "
                     "(may take a moment for tables with many files)[/dim]",
                     classes="detail-section",
                 )
@@ -560,6 +551,8 @@ class DetailPanel(VerticalScroll):
             self._search_cdf_range()
         elif event.button.id == "run-analysis":
             self._load_analysis()
+        elif event.button.id == "analysis-back-overview":
+            self._show_cached_analysis()
         elif event.button.id == "analyze-parquet-file":
             self._analyze_parquet_file()
 
@@ -941,8 +934,20 @@ class DetailPanel(VerticalScroll):
     # ── Delta Analysis ──────────────────────────────────────────────────
 
     @work(group="detail_aux", exclusive=True)
+    async def _show_cached_analysis(self) -> None:
+        """Re-render analysis from cached results (no API calls)."""
+        if self._analysis_result is None:
+            self._load_analysis()
+            return
+
+        analysis_pane = self.query_one("#tab-analysis", TabPane)
+        for child in list(analysis_pane.children):
+            child.remove()
+        await self._render_analysis(analysis_pane, self._analysis_result)
+
+    @work(group="detail_aux", exclusive=True)
     async def _load_analysis(self) -> None:
-        """Run Delta Analysis — read parquet footers and display statistics."""
+        """Run Delta Analysis — read parquet metadata and display statistics."""
         table_data = self._current_table_data
         if table_data is None:
             return
@@ -984,6 +989,7 @@ class DetailPanel(VerticalScroll):
 
             await self._render_analysis(analysis_pane, result)
             self._analysis_file_paths = result.file_paths
+            self._analysis_result = result
 
         except Exception as e:
             with contextlib.suppress(NoMatches):
@@ -1131,7 +1137,7 @@ class DetailPanel(VerticalScroll):
                 child.remove()
 
             await analysis_pane.mount(
-                Button("← Back to Overview", id="run-analysis", variant="default")
+                Button("← Back to Overview", id="analysis-back-overview", variant="default")
             )
             await analysis_pane.mount(
                 Label(f"📄 {file_name}", classes="detail-title")
@@ -1145,7 +1151,7 @@ class DetailPanel(VerticalScroll):
                 f"File analysis failed: {e}", severity="error", markup=False
             )
             await analysis_pane.mount(
-                Button("← Back to Overview", id="run-analysis", variant="default")
+                Button("← Back to Overview", id="analysis-back-overview", variant="default")
             )
 
     async def _render_analysis_in_pane(self, pane, result) -> None:
@@ -1212,21 +1218,40 @@ class DetailPanel(VerticalScroll):
 
     @work(group="detail_aux", exclusive=True)
     async def _analyze_parquet_file(self) -> None:
-        """Analyse a standalone parquet file by reading its footer."""
+        """Analyse a standalone parquet file by reading its metadata."""
         file_data = self._current_file_data
         if file_data is None:
             return
 
+        # Determine render target: Analysis tab pane (preview) or inline (highlight)
+        try:
+            pane = self.query_one("#pq-tab-analysis", TabPane)
+            in_tab = True
+        except NoMatches:
+            pane = None
+            in_tab = False
+
         with contextlib.suppress(NoMatches):
             self.query_one("#analyze-parquet-file", Button).remove()
 
-        self.mount(
-            Static(
-                "[dim]Reading parquet footer…[/dim]",
-                id="parquet-analysis-progress",
-                classes="detail-section",
+        if in_tab:
+            for child in list(pane.children):
+                child.remove()
+            await pane.mount(
+                Static(
+                    "[dim]Reading parquet metadata…[/dim]",
+                    id="parquet-analysis-progress",
+                    classes="detail-section",
+                )
             )
-        )
+        else:
+            self.mount(
+                Static(
+                    "[dim]Reading parquet metadata…[/dim]",
+                    id="parquet-analysis-progress",
+                    classes="detail-section",
+                )
+            )
 
         try:
             result = await self.client.delta.analyze_parquet_file(
@@ -1239,8 +1264,10 @@ class DetailPanel(VerticalScroll):
             with contextlib.suppress(NoMatches):
                 self.query_one("#parquet-analysis-progress", Static).remove()
 
-            # Render inline (no TabPane — file view is flat)
-            await self._render_analysis_inline(result)
+            if in_tab:
+                await self._render_analysis_in_pane(pane, result)
+            else:
+                await self._render_analysis_inline(result)
 
         except Exception as e:
             with contextlib.suppress(NoMatches):
@@ -1426,7 +1453,7 @@ class DetailPanel(VerticalScroll):
             self.mount(Static(f"❌ CSV parse error: {esc(str(e))}", classes="detail-section"))
 
     async def _preview_parquet(self, data: FileNode) -> None:
-        """Read parquet file with pyarrow and display schema + sample rows."""
+        """Read parquet file with pyarrow and display tabbed Schema + Data + Analysis."""
         try:
             import pyarrow.parquet as pq
 
@@ -1437,8 +1464,9 @@ class DetailPanel(VerticalScroll):
             metadata = pf.metadata
 
             self._remove_loading()
+            self._current_file_data = data
 
-            # Schema info
+            # Summary line
             self.mount(
                 Static(
                     f"[b]Rows:[/b] {metadata.num_rows:,}  "
@@ -1448,25 +1476,56 @@ class DetailPanel(VerticalScroll):
                 )
             )
 
-            # Schema table
-            self.mount(Label("Schema", classes="detail-title"))
-            schema_table = DataTable(id="schema-table")
-            self.mount(schema_table)
+            tc = TabbedContent(classes="parquet-tabs")
+            await self.mount(tc)
+
+            # ── Schema tab ──────────────────────────────────────────
+            schema_pane = TabPane("Schema", id="pq-tab-schema")
+            await tc.add_pane(schema_pane)
+            schema_table = DataTable()
+            await schema_pane.mount(schema_table)
             schema_table.add_columns("Column", "Type", "Nullable")
             for i in range(len(schema)):
                 field = schema.field(i)
-                schema_table.add_row(field.name, str(field.type), "✓" if field.nullable else "✗")
+                schema_table.add_row(
+                    field.name, str(field.type), "✓" if field.nullable else "✗"
+                )
 
-            # Sample data (first 100 rows)
+            # ── Data tab ────────────────────────────────────────────
+            data_pane = TabPane("Data", id="pq-tab-data")
+            await tc.add_pane(data_pane)
             sample = coerce_timestamps(pf.read_row_groups([0]).slice(0, 100))
-            self.mount(Label("Data (first 100 rows)", classes="detail-title"))
             data_table = DataTable(classes="preview-content")
-            self.mount(data_table)
+            await data_pane.mount(data_table)
             col_names = [schema.field(i).name for i in range(len(schema))]
             data_table.add_columns(*col_names)
             for row_idx in range(sample.num_rows):
-                row_vals = [str(sample.column(c)[row_idx]) for c in range(len(col_names))]
+                row_vals = [
+                    str(sample.column(c)[row_idx]) for c in range(len(col_names))
+                ]
                 data_table.add_row(*row_vals)
+            if sample.num_rows >= 100:
+                await data_pane.mount(
+                    Static("[dim]Showing first 100 rows[/dim]", classes="detail-section")
+                )
+
+            # ── Analysis tab (lazy) ─────────────────────────────────
+            analysis_pane = TabPane("Analysis", id="pq-tab-analysis")
+            await tc.add_pane(analysis_pane)
+            await analysis_pane.mount(
+                Button(
+                    "Run Analysis",
+                    id="analyze-parquet-file",
+                    variant="primary",
+                )
+            )
+            await analysis_pane.mount(
+                Static(
+                    "[dim]Analyses row groups, column chunks, "
+                    "and compression statistics[/dim]",
+                    classes="detail-section",
+                )
+            )
         except ImportError:
             self._remove_loading()
             self.mount(
