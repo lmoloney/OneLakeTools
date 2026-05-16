@@ -318,6 +318,12 @@ class DfsClient:
             raise ValueError("length requires offset")
         if suffix_length is None and offset is None:
             raise ValueError("At least one of offset or suffix_length must be provided")
+        if suffix_length is not None and suffix_length <= 0:
+            raise ValueError("suffix_length must be positive")
+        if offset is not None and offset < 0:
+            raise ValueError("offset must be non-negative")
+        if length is not None and length <= 0:
+            raise ValueError("length must be positive")
 
         if suffix_length is not None:
             range_value = f"bytes=-{suffix_length}"
