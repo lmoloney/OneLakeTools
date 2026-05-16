@@ -168,7 +168,7 @@ class DetailPanel(VerticalScroll):
         self._clear()
         self._current_file_data = data
         file_name = data.path.split("/")[-1]
-        self.mount(Label(f"📄 {file_name}", classes="detail-title"))
+        self.mount(Label(f"📄 {esc(file_name)}", classes="detail-title"))
         rel = data.path.split("/", 1)[-1] if "/" in data.path else data.path
         friendly = f"{self._workspace_name} / {self._item_name} / {rel}"
         self.mount(Static(f"[b]Path:[/b] {esc(friendly)}", classes="detail-section"))
@@ -1133,7 +1133,7 @@ class DetailPanel(VerticalScroll):
             await analysis_pane.mount(
                 Button("← Back to Overview", id="analysis-back-overview", variant="default")
             )
-            await analysis_pane.mount(Label(f"📄 {file_name}", classes="detail-title"))
+            await analysis_pane.mount(Label(f"📄 {esc(file_name)}", classes="detail-title"))
             await self._render_analysis_in_pane(analysis_pane, result)
 
         except Exception as e:

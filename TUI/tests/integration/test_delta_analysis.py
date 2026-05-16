@@ -30,9 +30,6 @@ _SIMPLE_TABLES = [
     "schema_evolution_type",
 ]
 
-# Tables that may fail analysis (reader v3+ / advanced features)
-_MAY_FAIL_TABLES = {"deletion_vector_demo"}
-
 # large_customers tested separately with max_files=1
 
 

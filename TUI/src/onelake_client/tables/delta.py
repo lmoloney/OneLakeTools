@@ -962,6 +962,7 @@ class DeltaTableReader:
             )
 
         _INITIAL_TAIL = 64 * 1024  # 64 KB
+        _MAX_FOOTER_BYTES = 16 * 1024 * 1024  # 16 MB safety cap per file
 
         file_uris = await self.list_files(workspace, item_path, table_name)
         files_skipped = max(0, len(file_uris) - max_files)
@@ -990,14 +991,16 @@ class DeltaTableReader:
             if progress_callback:
                 await progress_callback(idx + 1, len(file_uris), file_name)
 
-            tail = await self._dfs.read_file_range(ws_guid, file_path, suffix_length=_INITIAL_TAIL)
+            tail = await self._dfs.read_file_range(
+                ws_guid, file_path, suffix_length=_INITIAL_TAIL, max_bytes=_MAX_FOOTER_BYTES
+            )
 
             metadata = _parse_parquet_footer(tail)
             if metadata is None and len(tail) >= 8 and tail[-4:] == _PARQUET_MAGIC:
                 # Footer didn't fit in initial tail — try larger read
                 footer_len = struct.unpack("<I", tail[-8:-4])[0]
                 tail = await self._dfs.read_file_range(
-                    ws_guid, file_path, suffix_length=footer_len + 8
+                    ws_guid, file_path, suffix_length=footer_len + 8, max_bytes=_MAX_FOOTER_BYTES
                 )
                 metadata = _parse_parquet_footer(tail)
 
@@ -1052,13 +1055,18 @@ class DeltaTableReader:
             )
 
         _INITIAL_TAIL = 64 * 1024
+        _MAX_FOOTER_BYTES = 16 * 1024 * 1024
 
-        raw = await self._dfs.read_file_range(workspace, path, suffix_length=_INITIAL_TAIL)
+        raw = await self._dfs.read_file_range(
+            workspace, path, suffix_length=_INITIAL_TAIL, max_bytes=_MAX_FOOTER_BYTES
+        )
 
         metadata = _parse_parquet_footer(raw)
         if metadata is None and len(raw) >= 8 and raw[-4:] == _PARQUET_MAGIC:
             footer_len = struct.unpack("<I", raw[-8:-4])[0]
-            raw = await self._dfs.read_file_range(workspace, path, suffix_length=footer_len + 8)
+            raw = await self._dfs.read_file_range(
+                workspace, path, suffix_length=footer_len + 8, max_bytes=_MAX_FOOTER_BYTES
+            )
             metadata = _parse_parquet_footer(raw)
 
         if metadata is None:
