@@ -949,12 +949,15 @@ class DetailPanel(VerticalScroll):
         if table_data is None:
             return
 
+        # Disable button during analysis (don't remove — re-enable on failure)
         with contextlib.suppress(NoMatches):
-            self.query_one("#run-analysis", Button).remove()
+            self.query_one("#run-analysis", Button).disabled = True
 
         analysis_pane = self.query_one("#tab-analysis", TabPane)
+        # Remove description text but keep the button
         for child in list(analysis_pane.children):
-            child.remove()
+            if not isinstance(child, Button):
+                child.remove()
         await analysis_pane.mount(
             Static(
                 "[dim]Starting analysis…[/dim]",
@@ -981,6 +984,9 @@ class DetailPanel(VerticalScroll):
             if self._current_table_data is not table_data:
                 return
 
+            # Success — remove button and progress, render results
+            with contextlib.suppress(NoMatches):
+                self.query_one("#run-analysis", Button).remove()
             with contextlib.suppress(NoMatches):
                 self.query_one("#analysis-progress", Static).remove()
 
@@ -991,16 +997,11 @@ class DetailPanel(VerticalScroll):
         except Exception as e:
             with contextlib.suppress(NoMatches):
                 self.query_one("#analysis-progress", Static).remove()
+            # Re-enable button for retry
+            with contextlib.suppress(NoMatches):
+                self.query_one("#run-analysis", Button).disabled = False
             self.notify(f"Analysis failed: {e}", severity="error", markup=False)
             logger.exception("Delta analysis failed for %s", table_data.table_name)
-            with contextlib.suppress(NoMatches):
-                pane = self.query_one("#tab-analysis", TabPane)
-                await pane.mount(
-                    Static(
-                        "[dim]Analysis failed — re-select the table to retry[/dim]",
-                        classes="detail-section",
-                    )
-                )
 
     async def _render_analysis(self, pane: TabPane, result) -> None:
         """Render the 5 analysis sections as DataTables."""

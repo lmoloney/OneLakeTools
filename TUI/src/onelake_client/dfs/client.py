@@ -299,10 +299,15 @@ class DfsClient:
             offset: Start byte offset.
             length: Number of bytes to read (requires *offset*).
             suffix_length: Read the last N bytes of the file.
-            max_bytes: Optional safety limit.  If the server returns
-                ``200`` (full file) and the body exceeds this size,
-                a :class:`~onelake_client.exceptions.FileTooLargeError`
-                is raised to prevent accidental large downloads.
+            max_bytes: Optional safety limit.  A HEAD request is issued
+                first to check the full file size.  If ``Content-Length``
+                exceeds this value, a
+                :class:`~onelake_client.exceptions.FileTooLargeError`
+                is raised *before* downloading the body.  This prevents
+                OOM when OneLake ignores the ``Range`` header and would
+                return the full file.  Note: files larger than this limit
+                are rejected even if the server would honour Range with
+                a small 206 response (see #50 for a streaming approach).
 
         Returns:
             The requested byte range (or full file if server ignores Range).
@@ -365,7 +370,8 @@ class DfsClient:
         elif response.status_code != 206:
             raise ApiError(
                 response.status_code,
-                message=f"Range request returned {response.status_code} instead of 206",
+                message=f"Range request returned unexpected status {response.status_code} "
+                "(expected 200 or 206)",
             )
 
         return response.content
