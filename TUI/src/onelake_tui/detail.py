@@ -561,11 +561,8 @@ class DetailPanel(VerticalScroll):
         dt = event.data_table
         if "analysis-files-table" not in dt.classes:
             return
-        row = dt.get_row(event.row_key)
-        # First column is the file name (may be Rich-escaped)
-        from rich.text import Text
-
-        file_name = str(row[0]) if not isinstance(row[0], Text) else row[0].plain
+        # row_key.value is the original file_name (set via key= in add_row)
+        file_name = str(event.row_key.value)
         if file_name in self._analysis_file_paths:
             self._drill_into_parquet_file(file_name)
 
@@ -996,6 +993,14 @@ class DetailPanel(VerticalScroll):
                 self.query_one("#analysis-progress", Static).remove()
             self.notify(f"Analysis failed: {e}", severity="error", markup=False)
             logger.exception("Delta analysis failed for %s", table_data.table_name)
+            with contextlib.suppress(NoMatches):
+                pane = self.query_one("#tab-analysis", TabPane)
+                await pane.mount(
+                    Static(
+                        "[dim]Analysis failed — re-select the table to retry[/dim]",
+                        classes="detail-section",
+                    )
+                )
 
     async def _render_analysis(self, pane: TabPane, result) -> None:
         """Render the 5 analysis sections as DataTables."""
@@ -1047,6 +1052,7 @@ class DetailPanel(VerticalScroll):
                     f"{f.row_count:,}",
                     str(f.row_group_count),
                     esc(f.created_by or ""),
+                    key=f.file_name,
                 )
 
         # ── Row Groups ──────────────────────────────────────────────

@@ -999,6 +999,11 @@ class DeltaTableReader:
             if metadata is None and len(tail) >= 8 and tail[-4:] == _PARQUET_MAGIC:
                 # Footer didn't fit in initial tail — try larger read
                 footer_len = struct.unpack("<I", tail[-8:-4])[0]
+                if footer_len + 8 > _MAX_FOOTER_BYTES:
+                    logger.warning(
+                        "Skipping %s — footer too large (%d bytes)", file_name, footer_len
+                    )
+                    continue
                 tail = await self._dfs.read_file_range(
                     ws_guid, file_path, suffix_length=footer_len + 8, max_bytes=_MAX_FOOTER_BYTES
                 )
@@ -1064,6 +1069,8 @@ class DeltaTableReader:
         metadata = _parse_parquet_footer(raw)
         if metadata is None and len(raw) >= 8 and raw[-4:] == _PARQUET_MAGIC:
             footer_len = struct.unpack("<I", raw[-8:-4])[0]
+            if footer_len + 8 > _MAX_FOOTER_BYTES:
+                raise DeltaError(f"Parquet footer too large ({footer_len} bytes): {path}")
             raw = await self._dfs.read_file_range(
                 workspace, path, suffix_length=footer_len + 8, max_bytes=_MAX_FOOTER_BYTES
             )

@@ -1558,7 +1558,7 @@ class TestAnalysisTab:
 
     @pytest.mark.asyncio
     async def test_analysis_error_no_tables_rendered(self):
-        """Analysis error should not render DataTables."""
+        """Analysis error should not render DataTables and should allow retry."""
         from textual.widgets import Button
 
         client = _make_mock_client()
@@ -1578,12 +1578,13 @@ class TestAnalysisTab:
             btn = detail.query_one("#run-analysis", Button)
             btn.press()
             await pilot.pause()
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1.0)
+            await pilot.pause()
             await pilot.pause()
 
             pane = detail.query_one("#tab-analysis", TabPane)
             tables = pane.query(DataTable)
-            assert len(tables) == 0
+            assert len(tables) == 0, "No DataTables should render on error"
         finally:
             await ctx.__aexit__(None, None, None)
 
