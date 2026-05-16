@@ -82,7 +82,7 @@ class ColumnChunkInfo(BaseModel):
     compressed_size: int
     uncompressed_size: int
     num_values: int
-    dictionary_page_size: int = 0
+    has_dictionary: bool = False
     encodings: list[str] = []
 
 

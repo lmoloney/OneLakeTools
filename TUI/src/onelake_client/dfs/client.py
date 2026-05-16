@@ -279,6 +279,7 @@ class DfsClient:
         offset: int | None = None,
         length: int | None = None,
         suffix_length: int | None = None,
+        max_bytes: int | None = None,
     ) -> bytes:
         """Read a byte range from a file in OneLake.
 
@@ -288,22 +289,33 @@ class DfsClient:
         - *offset* + *length* → ``Range: bytes=X-(X+length-1)``
         - *offset* alone → ``Range: bytes=X-`` (offset to end)
 
+        OneLake DFS may ignore the ``Range`` header and return the full
+        file as a ``200 OK`` response (per RFC 7233 §4.4).  The method
+        accepts both ``200`` and ``206`` as success.
+
         Args:
             workspace: Workspace name or GUID.
             path: Full path within the workspace.
             offset: Start byte offset.
             length: Number of bytes to read (requires *offset*).
             suffix_length: Read the last N bytes of the file.
+            max_bytes: Optional safety limit.  If the server returns
+                ``200`` (full file) and the body exceeds this size,
+                a :class:`~onelake_client.exceptions.FileTooLargeError`
+                is raised to prevent accidental large downloads.
 
         Returns:
-            The requested byte range.
+            The requested byte range (or full file if server ignores Range).
 
         Raises:
             ValueError: If parameters are missing or conflicting.
-            ApiError: If the server does not return 206 Partial Content.
+            ApiError: If the server returns a non-success status.
+            FileTooLargeError: If the response exceeds *max_bytes*.
         """
         if suffix_length is not None and (offset is not None or length is not None):
             raise ValueError("suffix_length cannot be combined with offset or length")
+        if length is not None and offset is None:
+            raise ValueError("length requires offset")
         if suffix_length is None and offset is None:
             raise ValueError("At least one of offset or suffix_length must be provided")
 
@@ -327,6 +339,8 @@ class DfsClient:
         # (valid per RFC 7233 §4.4 — server MAY ignore Range and send 200).
         if response.status_code == 200:
             logger.debug("Range request returned 200 (full file) instead of 206 for %s", path)
+            if max_bytes is not None and len(response.content) > max_bytes:
+                raise FileTooLargeError(size=len(response.content), max_bytes=max_bytes)
         elif response.status_code != 206:
             raise ApiError(
                 response.status_code,

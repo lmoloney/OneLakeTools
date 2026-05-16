@@ -355,6 +355,18 @@ async def test_read_file_range_suffix_with_offset(auth):
     await client.close()
 
 
+async def test_read_file_range_length_without_offset(auth):
+    """Providing length without offset raises ValueError."""
+    client = DfsClient(auth)
+    with pytest.raises(ValueError, match="length requires offset"):
+        await client.read_file_range(
+            "my-workspace",
+            "MyLakehouse.Lakehouse/Files/data.parquet",
+            length=100,
+        )
+    await client.close()
+
+
 async def test_read_file_network_timeout(httpx_mock, auth):
     """Test that network timeout is handled during streaming."""
     import httpx

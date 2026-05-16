@@ -101,8 +101,12 @@ def _parse_parquet_footer(raw_bytes: bytes):
 
     footer_content = raw_bytes[-(footer_len + 8) : -8]
     fake_buf = _PARQUET_MAGIC + footer_content + struct.pack("<I", footer_len) + _PARQUET_MAGIC
-    pf = pq.ParquetFile(io.BytesIO(fake_buf))
-    return pf.metadata
+    try:
+        pf = pq.ParquetFile(io.BytesIO(fake_buf))
+        return pf.metadata
+    except Exception:
+        logger.debug("Failed to parse parquet footer (%d bytes)", len(raw_bytes))
+        return None
 
 
 def _extract_file_stats(
@@ -167,7 +171,9 @@ def _extract_file_stats(
                     compressed_size=cc.total_compressed_size,
                     uncompressed_size=cc.total_uncompressed_size,
                     num_values=cc.num_values,
-                    dictionary_page_size=cc.dictionary_page_offset or 0,
+                    has_dictionary=(
+                        cc.dictionary_page_offset is not None and cc.dictionary_page_offset >= 0
+                    ),
                     encodings=list(cc.encodings) if hasattr(cc, "encodings") else [],
                 )
             )
