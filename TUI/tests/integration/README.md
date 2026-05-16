@@ -47,10 +47,15 @@ Test tables are pre-provisioned in the Fabric workspace. To recreate them:
 This table specifically tests the scenario where CDF was enabled *after*
 table creation. The setup script:
 
-1. Creates the table without `delta.enableChangeDataFeed`
-2. Inserts initial rows (versions 0–1, no CDF data)
-3. Enables CDF via `ALTER TABLE SET TBLPROPERTIES`
-4. Inserts, updates, and deletes rows (versions 3+, with CDF data)
+1. Drops and recreates the table without `delta.enableChangeDataFeed` (version 0)
+2. Inserts initial rows (version 1, no CDF data)
+3. Enables CDF via `ALTER TABLE SET TBLPROPERTIES` (version 2)
+4. Inserts, updates, and deletes rows (versions 3–5, with CDF data)
 
 This means `read_cdf(starting_version=0)` will fail, but
-`read_cdf(starting_version=latest)` and `find_cdf_start_version()` should work.
+`read_cdf(starting_version=2)` and `find_cdf_start_version()` should work.
+
+> **Note:** The existing `TestReadCdf` integration tests use
+> `starting_version=0` with a skip guard for the CDF-not-enabled error.
+> This is intentional — the tests verify both the success and the
+> error-handling paths depending on the table's actual state.

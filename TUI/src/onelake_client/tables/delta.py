@@ -678,6 +678,9 @@ class DeltaTableReader:
         if high is None:
             high = dt.version()
 
+        if low > high:
+            raise ValueError(f"Invalid version range: low ({low}) > high ({high})")
+
         def _search():
             lo, hi = low, high
             result = -1

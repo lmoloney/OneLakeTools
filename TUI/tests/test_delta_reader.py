@@ -1220,8 +1220,7 @@ class TestIsCdfNotEnabledError:
         from onelake_client.tables.delta import is_cdf_not_enabled_error
 
         exc = DeltaError(
-            "External error: Reading a table version: 0 "
-            "that does not have change data enabled"
+            "External error: Reading a table version: 0 that does not have change data enabled"
         )
         assert is_cdf_not_enabled_error(exc) is True
 
@@ -1274,6 +1273,7 @@ class TestFindCdfStartVersion:
     @pytest.mark.asyncio()
     async def test_finds_earliest_enabled_version(self, auth):
         """Binary search finds the first version where CDF succeeds."""
+
         # CDF enabled from version 5 onward (versions 0-4 fail)
         def _load_cdf(starting_version, ending_version):
             if starting_version < 5:
@@ -1291,9 +1291,7 @@ class TestFindCdfStartVersion:
 
         reader = DeltaTableReader(auth)
         with self._patch_reader(reader, dt_mock):
-            result = await reader.find_cdf_start_version(
-                "ws", "LH.Lakehouse", "t", low=0, high=10
-            )
+            result = await reader.find_cdf_start_version("ws", "LH.Lakehouse", "t", low=0, high=10)
 
         assert result == 5
 
@@ -1308,9 +1306,7 @@ class TestFindCdfStartVersion:
 
         reader = DeltaTableReader(auth)
         with self._patch_reader(reader, dt_mock):
-            result = await reader.find_cdf_start_version(
-                "ws", "LH.Lakehouse", "t", low=0, high=5
-            )
+            result = await reader.find_cdf_start_version("ws", "LH.Lakehouse", "t", low=0, high=5)
 
         assert result == 0
 
@@ -1328,9 +1324,7 @@ class TestFindCdfStartVersion:
             self._patch_reader(reader, dt_mock),
             pytest.raises(DeltaError, match="does not have change data enabled"),
         ):
-            await reader.find_cdf_start_version(
-                "ws", "LH.Lakehouse", "t", low=0, high=3
-            )
+            await reader.find_cdf_start_version("ws", "LH.Lakehouse", "t", low=0, high=3)
 
     @pytest.mark.asyncio()
     async def test_non_cdf_error_propagates(self, auth):
@@ -1344,9 +1338,7 @@ class TestFindCdfStartVersion:
             self._patch_reader(reader, dt_mock),
             pytest.raises(DeltaError, match="storage unavailable"),
         ):
-            await reader.find_cdf_start_version(
-                "ws", "LH.Lakehouse", "t", low=0, high=5
-            )
+            await reader.find_cdf_start_version("ws", "LH.Lakehouse", "t", low=0, high=5)
 
     @pytest.mark.asyncio()
     async def test_enable_disable_reenable_finds_latest_range(self, auth):
@@ -1374,9 +1366,7 @@ class TestFindCdfStartVersion:
 
         reader = DeltaTableReader(auth)
         with self._patch_reader(reader, dt_mock):
-            result = await reader.find_cdf_start_version(
-                "ws", "LH.Lakehouse", "t", low=0, high=10
-            )
+            result = await reader.find_cdf_start_version("ws", "LH.Lakehouse", "t", low=0, high=10)
 
         assert result == 8, f"Expected start of latest CDF range (8), got {result}"
 
@@ -1404,13 +1394,24 @@ class TestFindCdfStartVersion:
 
         reader = DeltaTableReader(auth)
         with self._patch_reader(reader, dt_mock):
-            result = await reader.find_cdf_start_version(
-                "ws", "LH.Lakehouse", "t", low=0, high=100
-            )
+            result = await reader.find_cdf_start_version("ws", "LH.Lakehouse", "t", low=0, high=100)
 
         assert result == 50
         # log2(101) ≈ 7, so should be well under 20 calls
         assert call_count <= 15, f"Expected O(log n) calls, got {call_count}"
+
+    @pytest.mark.asyncio()
+    async def test_invalid_bounds_raises_value_error(self, auth):
+        """low > high should raise ValueError, not confusing TypeError."""
+        dt_mock = MagicMock()
+        dt_mock.version.return_value = 5
+
+        reader = DeltaTableReader(auth)
+        with (
+            self._patch_reader(reader, dt_mock),
+            pytest.raises(ValueError, match="Invalid version range"),
+        ):
+            await reader.find_cdf_start_version("ws", "LH.Lakehouse", "t", low=10, high=5)
 
 
 # ── DeltaTableReader.list_files ─────────────────────────────────────────

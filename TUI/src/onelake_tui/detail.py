@@ -491,14 +491,15 @@ class DetailPanel(VerticalScroll):
                         ", ".join(f"{k}={v}" for k, v in metrics.items()) if metrics else ""
                     )
                     config = c.get("configuration") or {}
-                    config_str = (
-                        ", ".join(f"{k}={v}" for k, v in config.items()) if config else ""
-                    )
+                    config_str = ", ".join(f"{k}={v}" for k, v in config.items()) if config else ""
                     details_parts = [p for p in [metrics_str, config_str] if p]
                     details = "\n".join(details_parts)
                     row_height = len(details_parts) if len(details_parts) > 1 else 1
                     tbl.add_row(
-                        str(c["version"]), str(ts), c["operation"], details,
+                        str(c["version"]),
+                        str(ts),
+                        c["operation"],
+                        details,
                         height=row_height,
                     )
             else:
@@ -717,14 +718,26 @@ class DetailPanel(VerticalScroll):
                     starting = expanded_start
                 except Exception as expand_err:
                     if is_cdf_not_enabled_error(expand_err):
-                        # CDF was enabled after creation — keep the latest-only result
-                        starting = delta_info.version
-                        cdf_table = await self.client.delta.read_cdf(
-                            table_data.workspace,
-                            table_data.item_path,
-                            table_data.table_name,
-                            starting_version=delta_info.version,
-                        )
+                        # CDF was enabled after creation — discover the
+                        # actual start within the expanded window
+                        try:
+                            discovered = await self.client.delta.find_cdf_start_version(
+                                table_data.workspace,
+                                table_data.item_path,
+                                table_data.table_name,
+                                low=expanded_start,
+                                high=delta_info.version,
+                            )
+                            cdf_table = await self.client.delta.read_cdf(
+                                table_data.workspace,
+                                table_data.item_path,
+                                table_data.table_name,
+                                starting_version=discovered,
+                            )
+                            starting = discovered
+                        except Exception:
+                            # Discovery failed — keep the latest-only result
+                            starting = delta_info.version
                     else:
                         raise
 
@@ -779,7 +792,8 @@ class DetailPanel(VerticalScroll):
             return
 
         version_label = (
-            f"version {starting}" if starting == delta_info.version
+            f"version {starting}"
+            if starting == delta_info.version
             else f"versions {starting}–{delta_info.version}"
         )
         await cdf_pane.mount(
@@ -861,9 +875,7 @@ class DetailPanel(VerticalScroll):
             if cdf_table.num_rows > 0:
                 await self._render_cdf_table(cdf_pane, cdf_table)
             else:
-                await cdf_pane.mount(
-                    Static("[dim]No change records found in the CDF range.[/dim]")
-                )
+                await cdf_pane.mount(Static("[dim]No change records found in the CDF range.[/dim]"))
         except Exception as e:
             with contextlib.suppress(NoMatches):
                 self.query_one("#cdf-loading").remove()

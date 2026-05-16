@@ -1259,8 +1259,7 @@ class TestCdfLatestFirst:
         client = _make_mock_client()
         client.delta.read_cdf = AsyncMock(
             side_effect=DeltaError(
-                "Reading a table version: 0 "
-                "that does not have change data enabled"
+                "Reading a table version: 0 that does not have change data enabled"
             )
         )
 
@@ -1301,9 +1300,7 @@ class TestCdfLatestFirst:
         from textual.widgets import Button
 
         client = _make_mock_client()
-        client.delta.read_cdf = AsyncMock(
-            side_effect=ConnectionError("Network unreachable")
-        )
+        client.delta.read_cdf = AsyncMock(side_effect=ConnectionError("Network unreachable"))
 
         info = DeltaTableInfo(
             name="holidays",
@@ -1338,4 +1335,3 @@ class TestCdfLatestFirst:
             )
         finally:
             await ctx.__aexit__(None, None, None)
-

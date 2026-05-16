@@ -29,11 +29,14 @@ from __future__ import annotations
 # directly connect to Fabric Spark from a local environment.
 
 NOTEBOOK_CELLS = """
-# Cell 1: Create cdf_tracking table WITHOUT CDF enabled
+# Cell 1: Drop and recreate cdf_tracking table WITHOUT CDF enabled
 # ─────────────────────────────────────────────────────────────────────
+# Idempotent: drops existing table to ensure clean state.
+
+spark.sql('DROP TABLE IF EXISTS cdf_tracking')
 
 spark.sql('''
-    CREATE TABLE IF NOT EXISTS cdf_tracking (
+    CREATE TABLE cdf_tracking (
         id INT,
         name STRING,
         status STRING,
@@ -41,8 +44,9 @@ spark.sql('''
     )
     USING DELTA
 ''')
+# Result: version 0 (CREATE TABLE)
 
-# Cell 2: Insert initial data (versions 0-1, no CDF)
+# Cell 2: Insert initial data (version 1, no CDF)
 # ─────────────────────────────────────────────────────────────────────
 
 from pyspark.sql import Row
@@ -55,19 +59,21 @@ initial_data = [
 ]
 df = spark.createDataFrame(initial_data)
 df.write.mode("append").format("delta").saveAsTable("cdf_tracking")
+# Result: version 1 (INSERT, no CDF)
 
-# Cell 3: Enable CDF (version 2-3)
+# Cell 3: Enable CDF (version 2)
 # ─────────────────────────────────────────────────────────────────────
 
 spark.sql('''
     ALTER TABLE cdf_tracking
     SET TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')
 ''')
+# Result: version 2 (ALTER TABLE — CDF enabled from here onward)
 
-# Cell 4: Insert + Update data WITH CDF enabled (versions 4+)
+# Cell 4: Insert + Update + Delete WITH CDF enabled (versions 3-5)
 # ─────────────────────────────────────────────────────────────────────
 
-# Insert new rows
+# Insert new rows (version 3)
 new_data = [
     Row(id=4, name="Dave", status="active", updated_at=datetime(2024, 6, 1)),
     Row(id=5, name="Eve", status="active", updated_at=datetime(2024, 6, 1)),
@@ -75,21 +81,23 @@ new_data = [
 df_new = spark.createDataFrame(new_data)
 df_new.write.mode("append").format("delta").saveAsTable("cdf_tracking")
 
-# Update existing rows
+# Update existing rows (version 4)
 spark.sql('''
     UPDATE cdf_tracking SET status = 'inactive', updated_at = current_timestamp()
     WHERE id = 2
 ''')
 
-# Delete a row
+# Delete a row (version 5)
 spark.sql("DELETE FROM cdf_tracking WHERE id = 3")
 
 # Cell 5: Verify
 # ─────────────────────────────────────────────────────────────────────
+# Expected: version >= 5, CDF enabled, read_cdf(starting_version=0)
+# should FAIL, read_cdf(starting_version=2) should SUCCEED.
 
 from delta.tables import DeltaTable
 dt = DeltaTable.forName(spark, "cdf_tracking")
-print(f"Version: {dt.history().count()}")
+print(f"Version: {dt.history().count() - 1}")
 props = spark.sql('SHOW TBLPROPERTIES cdf_tracking')
 cdf_prop = props.filter('key = \\'delta.enableChangeDataFeed\\'').collect()
 print(f"CDF enabled: {cdf_prop}")

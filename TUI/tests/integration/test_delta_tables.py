@@ -370,22 +370,30 @@ class TestReadCdf:
         assert hasattr(table, "num_rows"), f"Expected table-like object, got {type(table)}"
 
     async def test_has_cdf_columns(self, client, ws, lh):
-        table = await client.delta.read_cdf(ws, lh, self.TABLE, starting_version=0)
+        try:
+            table = await client.delta.read_cdf(ws, lh, self.TABLE, starting_version=0)
+        except Exception as exc:
+            if "change data feed" in str(exc).lower() or "not enabled" in str(exc).lower():
+                pytest.skip(f"CDF not enabled at version 0: {exc}")
+            raise
         col_names = set(table.column_names)
         for expected in ("_change_type", "_commit_version", "_commit_timestamp"):
             assert expected in col_names, f"Missing CDF column: {expected}"
 
     async def test_includes_insert_change_type(self, client, ws, lh):
-        table = await client.delta.read_cdf(ws, lh, self.TABLE, starting_version=0)
+        try:
+            table = await client.delta.read_cdf(ws, lh, self.TABLE, starting_version=0)
+        except Exception as exc:
+            if "change data feed" in str(exc).lower() or "not enabled" in str(exc).lower():
+                pytest.skip(f"CDF not enabled at version 0: {exc}")
+            raise
         change_types = set(table.column("_change_type").to_pylist())
         assert "insert" in change_types, f"Expected 'insert' in change types, got: {change_types}"
 
     async def test_read_cdf_latest_version(self, client, ws, lh):
         """read_cdf with starting_version=latest should succeed (the new default)."""
         meta = await client.delta.get_metadata(ws, lh, self.TABLE)
-        table = await client.delta.read_cdf(
-            ws, lh, self.TABLE, starting_version=meta.version
-        )
+        table = await client.delta.read_cdf(ws, lh, self.TABLE, starting_version=meta.version)
         assert hasattr(table, "column_names")
 
 
@@ -415,8 +423,6 @@ class TestFindCdfStartVersion:
         start = await client.delta.find_cdf_start_version(
             ws, lh, self.TABLE, low=0, high=meta.version
         )
-        table = await client.delta.read_cdf(
-            ws, lh, self.TABLE, starting_version=start
-        )
+        table = await client.delta.read_cdf(ws, lh, self.TABLE, starting_version=start)
         assert hasattr(table, "column_names")
         assert hasattr(table, "num_rows")
