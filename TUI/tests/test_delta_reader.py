@@ -1348,6 +1348,70 @@ class TestFindCdfStartVersion:
                 "ws", "LH.Lakehouse", "t", low=0, high=5
             )
 
+    @pytest.mark.asyncio()
+    async def test_enable_disable_reenable_finds_latest_range(self, auth):
+        """Binary search finds start of latest contiguous CDF-enabled range.
+
+        Simulates CDF enabled v2-4, disabled v5-7, re-enabled v8+.
+        The (mid, high) probe ensures we find v8, not v2.
+        """
+
+        def _load_cdf(starting_version, ending_version):
+            # CDF enabled v2-4 and v8-10
+            # Probe (mid, high=10) fails if mid < 8 because range crosses disabled gap
+            if starting_version < 8:
+                raise DeltaError(
+                    f"Reading a table version: {starting_version} "
+                    "that does not have change data enabled"
+                )
+            result = MagicMock()
+            del result.read_all
+            return result
+
+        dt_mock = MagicMock()
+        dt_mock.version.return_value = 10
+        dt_mock.load_cdf.side_effect = _load_cdf
+
+        reader = DeltaTableReader(auth)
+        with self._patch_reader(reader, dt_mock):
+            result = await reader.find_cdf_start_version(
+                "ws", "LH.Lakehouse", "t", low=0, high=10
+            )
+
+        assert result == 8, f"Expected start of latest CDF range (8), got {result}"
+
+    @pytest.mark.asyncio()
+    async def test_binary_search_is_logarithmic(self, auth):
+        """Binary search makes O(log n) calls, not O(n)."""
+        # CDF enabled from version 50 onward, table has 100 versions
+        call_count = 0
+
+        def _load_cdf(starting_version, ending_version):
+            nonlocal call_count
+            call_count += 1
+            if starting_version < 50:
+                raise DeltaError(
+                    f"Reading a table version: {starting_version} "
+                    "that does not have change data enabled"
+                )
+            result = MagicMock()
+            del result.read_all
+            return result
+
+        dt_mock = MagicMock()
+        dt_mock.version.return_value = 100
+        dt_mock.load_cdf.side_effect = _load_cdf
+
+        reader = DeltaTableReader(auth)
+        with self._patch_reader(reader, dt_mock):
+            result = await reader.find_cdf_start_version(
+                "ws", "LH.Lakehouse", "t", low=0, high=100
+            )
+
+        assert result == 50
+        # log2(101) ≈ 7, so should be well under 20 calls
+        assert call_count <= 15, f"Expected O(log n) calls, got {call_count}"
+
 
 # ── DeltaTableReader.list_files ─────────────────────────────────────────
 

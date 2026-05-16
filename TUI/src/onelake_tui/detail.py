@@ -475,7 +475,7 @@ class DetailPanel(VerticalScroll):
             if commits:
                 tbl = DataTable(id="txn-table")
                 await txn_pane.mount(tbl)
-                tbl.add_columns("Version", "Timestamp", "Operation", "Metrics", "Configuration")
+                tbl.add_columns("Version", "Timestamp", "Operation", "Details")
                 for c in commits:
                     ts = c["timestamp"]
                     if isinstance(ts, datetime):
@@ -494,8 +494,12 @@ class DetailPanel(VerticalScroll):
                     config_str = (
                         ", ".join(f"{k}={v}" for k, v in config.items()) if config else ""
                     )
+                    details_parts = [p for p in [metrics_str, config_str] if p]
+                    details = "\n".join(details_parts)
+                    row_height = len(details_parts) if len(details_parts) > 1 else 1
                     tbl.add_row(
-                        str(c["version"]), str(ts), c["operation"], metrics_str, config_str
+                        str(c["version"]), str(ts), c["operation"], details,
+                        height=row_height,
                     )
             else:
                 await txn_pane.mount(Static("[dim]No transaction history found[/dim]"))
@@ -657,7 +661,13 @@ class DetailPanel(VerticalScroll):
 
     @work(group="detail_aux", exclusive=True)
     async def _load_cdf_preview(self) -> None:
-        """Load Change Data Feed records from the Delta table."""
+        """Load Change Data Feed records from the Delta table.
+
+        Strategy: start from the latest version (fast, always works regardless
+        of when CDF was enabled).  If the latest version returns 0 rows,
+        auto-expand to the last 10 versions.  Always offer a "Load Earlier
+        Versions" button for binary-search discovery of the full CDF range.
+        """
         table_data = self._current_table_data
         delta_info = self._current_delta_info
         if table_data is None or delta_info is None:
@@ -670,122 +680,112 @@ class DetailPanel(VerticalScroll):
         for child in list(cdf_pane.children):
             child.remove()
 
-        starting = max(0, delta_info.version - 10)
         await cdf_pane.mount(
             Static(
-                f"Loading CDF data (versions {starting}–{delta_info.version})…",
+                f"Loading CDF data (version {delta_info.version})…",
                 id="cdf-loading",
                 classes="detail-section",
             )
         )
 
         try:
+            # 1. Try latest version first
             cdf_table = await self.client.delta.read_cdf(
                 table_data.workspace,
                 table_data.item_path,
                 table_data.table_name,
-                starting_version=starting,
+                starting_version=delta_info.version,
             )
+
+            # 2. If 0 rows, auto-expand to last 10 versions
+            starting = delta_info.version
+            if cdf_table.num_rows == 0 and delta_info.version > 0:
+                expanded_start = max(0, delta_info.version - 10)
+                with contextlib.suppress(NoMatches):
+                    loading = self.query_one("#cdf-loading", Static)
+                    loading.update(
+                        f"No records at latest version — "
+                        f"expanding to versions {expanded_start}–{delta_info.version}…"
+                    )
+                try:
+                    cdf_table = await self.client.delta.read_cdf(
+                        table_data.workspace,
+                        table_data.item_path,
+                        table_data.table_name,
+                        starting_version=expanded_start,
+                    )
+                    starting = expanded_start
+                except Exception as expand_err:
+                    if is_cdf_not_enabled_error(expand_err):
+                        # CDF was enabled after creation — keep the latest-only result
+                        starting = delta_info.version
+                        cdf_table = await self.client.delta.read_cdf(
+                            table_data.workspace,
+                            table_data.item_path,
+                            table_data.table_name,
+                            starting_version=delta_info.version,
+                        )
+                    else:
+                        raise
+
+            if self._current_table_data is not table_data:
+                return
+
             await self._render_cdf_result(cdf_pane, cdf_table, starting, delta_info)
         except Exception as e:
-            if not is_cdf_not_enabled_error(e):
-                with contextlib.suppress(NoMatches):
-                    self.query_one("#cdf-loading").remove()
+            with contextlib.suppress(NoMatches):
+                self.query_one("#cdf-loading").remove()
+            if is_cdf_not_enabled_error(e):
+                await cdf_pane.mount(
+                    Static(
+                        "❌ CDF appears enabled in table properties "
+                        "but no readable CDF versions were found.",
+                        classes="detail-section",
+                    )
+                )
+            else:
                 await cdf_pane.mount(
                     Static(
                         f"❌ CDF preview failed: {esc(str(e))}",
                         classes="detail-section",
                     )
                 )
-                logger.debug("CDF preview failed: %s", e)
-                return
-
-            # CDF was enabled after table creation — retry with latest version
-            logger.debug(
-                "CDF not enabled at version %d, retrying with latest (%d)",
-                starting,
-                delta_info.version,
-            )
-            try:
-                with contextlib.suppress(NoMatches):
-                    loading = self.query_one("#cdf-loading", Static)
-                    loading.update(
-                        f"CDF not available at version {starting} "
-                        f"— retrying with latest version ({delta_info.version})…"
-                    )
-                cdf_table = await self.client.delta.read_cdf(
-                    table_data.workspace,
-                    table_data.item_path,
-                    table_data.table_name,
-                    starting_version=delta_info.version,
-                )
-                if self._current_table_data is not table_data:
-                    return
-
-                with contextlib.suppress(NoMatches):
-                    self.query_one("#cdf-loading").remove()
-
-                await cdf_pane.mount(
-                    Static(
-                        "⚠️ [yellow]CDF was enabled after this table was created. "
-                        f"Showing version {delta_info.version} only.[/yellow]",
-                        classes="detail-section",
-                    )
-                )
-                await cdf_pane.mount(
-                    Button(
-                        "Search Earlier Versions",
-                        id="search-cdf-range",
-                        variant="default",
-                    )
-                )
-
-                if cdf_table.num_rows == 0:
-                    await cdf_pane.mount(
-                        Static(
-                            "[dim]CDF is enabled but the latest version "
-                            "contains no change records.[/dim]",
-                            classes="detail-section",
-                        )
-                    )
-                else:
-                    await self._render_cdf_table(cdf_pane, cdf_table)
-            except Exception as retry_err:
-                with contextlib.suppress(NoMatches):
-                    self.query_one("#cdf-loading").remove()
-                if is_cdf_not_enabled_error(retry_err):
-                    await cdf_pane.mount(
-                        Static(
-                            "❌ CDF appears enabled in table properties "
-                            "but no readable CDF versions were found.",
-                            classes="detail-section",
-                        )
-                    )
-                else:
-                    await cdf_pane.mount(
-                        Static(
-                            f"❌ CDF preview failed: {esc(str(retry_err))}",
-                            classes="detail-section",
-                        )
-                    )
-                logger.debug("CDF retry also failed: %s", retry_err)
+            logger.debug("CDF preview failed: %s", e)
 
     async def _render_cdf_result(self, cdf_pane, cdf_table, starting, delta_info):
-        """Render a successful CDF result (no retry needed)."""
+        """Render CDF data with a 'Load Earlier Versions' button."""
         if self._current_table_data is None:
             return
 
         with contextlib.suppress(NoMatches):
             self.query_one("#cdf-loading").remove()
 
+        # Always show the "Load Earlier Versions" button
+        await cdf_pane.mount(
+            Button(
+                "Load Earlier Versions",
+                id="search-cdf-range",
+                variant="default",
+            )
+        )
+
         if cdf_table.num_rows == 0:
-            await cdf_pane.mount(Static("[dim]No CDF records in the last 10 versions[/dim]"))
+            await cdf_pane.mount(
+                Static(
+                    "[dim]No CDF records found in recent versions.[/dim]",
+                    classes="detail-section",
+                )
+            )
             return
 
+        version_label = (
+            f"version {starting}" if starting == delta_info.version
+            else f"versions {starting}–{delta_info.version}"
+        )
         await cdf_pane.mount(
             Static(
                 f"[dim]Showing {min(cdf_table.num_rows, 100)} of {cdf_table.num_rows} "
-                f"CDF records (versions {starting}–{delta_info.version})[/dim]",
+                f"CDF records ({version_label})[/dim]",
                 classes="detail-section",
             )
         )

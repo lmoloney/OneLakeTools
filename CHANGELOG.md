@@ -16,18 +16,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `IcebergTableReader` now uses environment-aware catalog and blob host URLs instead of hardcoded PROD endpoints — non-PROD rings (MSIT, DXT, DAILY) now hit the correct Iceberg endpoints
 - Updated SECURITY.md supported versions table (0.2.x → 0.4.x)
 - Data preview on Windows no longer fails with `'No time zone found with key UTC'` — added `tzdata` dependency for Windows where the OS lacks a system timezone database
-- CDF preview no longer fails on tables where Change Data Feed was enabled after creation — auto-retries with the latest version and offers a "Search Earlier Versions" button to discover the full CDF-available range
+- CDF preview no longer fails on tables where Change Data Feed was enabled after creation — starts from the latest version and offers a "Load Earlier Versions" button to discover the full CDF-available range
+- `find_cdf_start_version()` binary search now probes `(mid, high)` instead of `(mid, mid)` — correctly finds the start of the current contiguous CDF-enabled range even when CDF was toggled on/off/on
 
 ### Added
 
 - `fabric_headers_async()` and `dfs_headers_async()` methods on `OneLakeAuth` for non-blocking token acquisition
 - `max_items` parameter on `list_workspaces()` and `list_items()` to cap API results for large tenants
 - `iceberg_catalog_url` and `iceberg_blob_host` fields on `FabricEnvironment` with per-ring values
-- History tab now shows a **Configuration** column with table property changes (e.g. `delta.enableChangeDataFeed=true`) extracted from `metaData` actions in the Delta log
+- Windows test matrix in publish workflow — unit tests now run on both Ubuntu and Windows before PyPI release
 
 ### Changed
 
 - Workspace and item lookups in TUI widgets now use O(1) dict indexes instead of O(n) linear scans
+- CDF preview now defaults to the latest version first, auto-expanding to the last 10 versions if empty — faster and avoids errors on tables where CDF was enabled after creation
+- History tab merges Metrics and Configuration into a single **Details** column with multi-line rows when both are present
 
 ## [0.4.0] - 2026-05-05
 

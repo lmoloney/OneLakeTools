@@ -930,7 +930,7 @@ class TestHistoryTab:
             history_pane = detail.query_one("#tab-history", TabPane)
             dt = history_pane.query_one(DataTable)
             assert dt.row_count == 2
-            assert len(dt.columns) == 5  # Version, Timestamp, Operation, Metrics, Configuration
+            assert len(dt.columns) == 4  # Version, Timestamp, Operation, Details
         finally:
             await ctx.__aexit__(None, None, None)
 
@@ -1122,22 +1122,19 @@ class TestCdfTabEmpty:
             await ctx.__aexit__(None, None, None)
 
 
-# ── CDF retry on tables where CDF was enabled after creation ───────
+# ── CDF latest-first preview ───────────────────────────────────────
 
 
-class TestCdfRetryOnPartialEnable:
-    """CDF preview should auto-retry with latest version when initial load fails
-    because CDF was not enabled for early versions."""
+class TestCdfLatestFirst:
+    """CDF preview starts from latest version, auto-expands if empty,
+    and always shows 'Load Earlier Versions' button."""
 
     @pytest.mark.asyncio
-    async def test_cdf_retry_succeeds_with_data(self):
-        """Auto-retry with latest version shows data + warning note."""
-        from deltalake.exceptions import DeltaError
+    async def test_latest_first_with_data(self):
+        """Latest version has CDF data — shows data + button."""
         from textual.widgets import Button
 
         client = _make_mock_client()
-
-        call_count = 0
 
         class _MockCdfResult:
             column_names = ["_change_type", "id"]
@@ -1152,17 +1149,7 @@ class TestCdfRetryOnPartialEnable:
                     vals.append(m)
                 return vals
 
-        async def _read_cdf_side_effect(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if kwargs.get("starting_version", 0) < 5:
-                raise DeltaError(
-                    "External error: Reading a table version: 0 "
-                    "that does not have change data enabled"
-                )
-            return _MockCdfResult()
-
-        client.delta.read_cdf = AsyncMock(side_effect=_read_cdf_side_effect)
+        client.delta.read_cdf = AsyncMock(return_value=_MockCdfResult())
 
         info = DeltaTableInfo(
             name="holidays",
@@ -1186,17 +1173,12 @@ class TestCdfRetryOnPartialEnable:
             await pilot.pause()
 
             cdf_pane = detail.query_one("#tab-cdf", TabPane)
-            statics = cdf_pane.query(Static)
-            texts = [_get_widget_text(w) for w in statics]
 
-            assert any("CDF was enabled after" in t for t in texts), (
-                f"Expected CDF partial-enable warning. Found: {texts}"
-            )
-            # Should have the "Search Earlier Versions" button
+            # Should have the "Load Earlier Versions" button
             buttons = cdf_pane.query(Button)
             button_ids = [b.id for b in buttons]
             assert "search-cdf-range" in button_ids, (
-                f"Expected 'Search Earlier Versions' button. Found buttons: {button_ids}"
+                f"Expected 'Load Earlier Versions' button. Found: {button_ids}"
             )
             # Should have a DataTable with CDF data
             tables = cdf_pane.query(DataTable)
@@ -1205,9 +1187,8 @@ class TestCdfRetryOnPartialEnable:
             await ctx.__aexit__(None, None, None)
 
     @pytest.mark.asyncio
-    async def test_cdf_retry_succeeds_zero_rows(self):
-        """Auto-retry with 0 rows shows 'no change records' note."""
-        from deltalake.exceptions import DeltaError
+    async def test_latest_empty_auto_expands(self):
+        """Latest version has 0 rows — auto-expands to version-10 range."""
         from textual.widgets import Button
 
         client = _make_mock_client()
@@ -1216,20 +1197,35 @@ class TestCdfRetryOnPartialEnable:
             column_names = ["_change_type"]
             num_rows = 0
 
+        class _NonEmptyCdf:
+            column_names = ["_change_type", "id"]
+            num_rows = 3
+
+            def column(self, idx):
+                data = [["insert", "update", "delete"], [1, 2, 3]]
+                vals = []
+                for v in data[idx]:
+                    m = MagicMock()
+                    m.as_py.return_value = v
+                    vals.append(m)
+                return vals
+
+        call_count = 0
+
         async def _read_cdf_side_effect(*args, **kwargs):
-            if kwargs.get("starting_version", 0) < 5:
-                raise DeltaError(
-                    "Reading a table version: 0 "
-                    "that does not have change data enabled"
-                )
-            return _EmptyCdf()
+            nonlocal call_count
+            call_count += 1
+            sv = kwargs.get("starting_version", 0)
+            if sv == 15:
+                return _EmptyCdf()
+            return _NonEmptyCdf()
 
         client.delta.read_cdf = AsyncMock(side_effect=_read_cdf_side_effect)
 
         info = DeltaTableInfo(
             name="holidays",
             schema_=[Column(name="id", type="long")],
-            version=5,
+            version=15,
             num_files=1,
             size_bytes=100,
             properties={"delta.enableChangeDataFeed": "true"},
@@ -1248,17 +1244,14 @@ class TestCdfRetryOnPartialEnable:
             await pilot.pause()
 
             cdf_pane = detail.query_one("#tab-cdf", TabPane)
-            statics = cdf_pane.query(Static)
-            texts = [_get_widget_text(w) for w in statics]
-
-            assert any("no change records" in t.lower() for t in texts), (
-                f"Expected 'no change records' note. Found: {texts}"
-            )
+            tables = cdf_pane.query(DataTable)
+            assert len(tables) >= 1, "Expected DataTable after auto-expand"
+            assert call_count >= 2, "Expected at least 2 read_cdf calls (latest + expanded)"
         finally:
             await ctx.__aexit__(None, None, None)
 
     @pytest.mark.asyncio
-    async def test_cdf_retry_also_fails(self):
+    async def test_all_versions_fail_shows_error(self):
         """When even latest version fails with CDF-not-enabled, show clear error."""
         from deltalake.exceptions import DeltaError
         from textual.widgets import Button

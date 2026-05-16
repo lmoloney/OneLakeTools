@@ -686,7 +686,10 @@ class DeltaTableReader:
             while lo <= hi:
                 mid = (lo + hi) // 2
                 try:
-                    cdf = dt.load_cdf(starting_version=mid, ending_version=mid)
+                    # Probe (mid, high) — not (mid, mid) — so the predicate is
+                    # monotonic even if CDF was toggled on/off/on.  Once mid is
+                    # inside the current contiguous range, all probes succeed.
+                    cdf = dt.load_cdf(starting_version=mid, ending_version=high)
                     if hasattr(cdf, "read_all"):
                         cdf.read_all()
                     result = mid
