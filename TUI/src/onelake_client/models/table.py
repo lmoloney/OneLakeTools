@@ -119,3 +119,4 @@ class DeltaAnalysisResult(BaseModel):
     row_groups: list[RowGroupInfo]
     column_chunks: list[ColumnChunkInfo]
     columns: list[ColumnInfo]
+    file_paths: dict[str, tuple[str, str]] = {}  # file_name → (workspace, dfs_path)

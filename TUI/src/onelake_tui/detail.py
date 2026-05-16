@@ -107,6 +107,7 @@ class DetailPanel(VerticalScroll):
         self._current_table_data: TableNode | None = None
         self._current_file_data: FileNode | None = None
         self._current_delta_info = None
+        self._analysis_file_paths: dict[str, tuple[str, str]] = {}
         self._data_preview_loaded: bool = False
         self._debounce_timer = None
         self._pending_node: NodeData = None
@@ -145,6 +146,7 @@ class DetailPanel(VerticalScroll):
         self._current_table_data = None
         self._current_file_data = None
         self._current_delta_info = None
+        self._analysis_file_paths = {}
         self._data_preview_loaded = False
         self.remove_children()
 
@@ -561,6 +563,19 @@ class DetailPanel(VerticalScroll):
         elif event.button.id == "analyze-parquet-file":
             self._analyze_parquet_file()
 
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Handle row selection in analysis files table for drill-down."""
+        dt = event.data_table
+        if "analysis-files-table" not in dt.classes:
+            return
+        row = dt.get_row(event.row_key)
+        # First column is the file name (may be Rich-escaped)
+        from rich.text import Text
+
+        file_name = str(row[0]) if not isinstance(row[0], Text) else row[0].plain
+        if file_name in self._analysis_file_paths:
+            self._drill_into_parquet_file(file_name)
+
     @work(group="detail_aux", exclusive=True)
     async def _load_data_preview(self) -> None:
         """Fetch first 100 rows from the Delta table's parquet files."""
@@ -968,6 +983,7 @@ class DetailPanel(VerticalScroll):
                 self.query_one("#analysis-progress", Static).remove()
 
             await self._render_analysis(analysis_pane, result)
+            self._analysis_file_paths = result.file_paths
 
         except Exception as e:
             with contextlib.suppress(NoMatches):
@@ -1009,10 +1025,16 @@ class DetailPanel(VerticalScroll):
             )
         )
 
-        # ── Parquet Files ───────────────────────────────────────────
+        # ── Parquet Files (clickable for drill-down) ──────────────────
         if result.files:
+            await pane.mount(
+                Static(
+                    "[dim]Select a file and press Enter to drill into it[/dim]",
+                    classes="detail-section",
+                )
+            )
             await pane.mount(Label("Parquet Files", classes="detail-title"))
-            files_table = DataTable()
+            files_table = DataTable(classes="analysis-files-table", cursor_type="row")
             await pane.mount(files_table)
             files_table.add_columns("File", "Rows", "Row Groups", "Created By")
             for f in result.files:
@@ -1079,6 +1101,114 @@ class DetailPanel(VerticalScroll):
                 )
 
     # ── Parquet file analysis ──────────────────────────────────────────────
+
+    @work(group="detail_aux", exclusive=True)
+    async def _drill_into_parquet_file(self, file_name: str) -> None:
+        """Drill into a single parquet file from the analysis files table."""
+        table_data = self._current_table_data
+        if table_data is None:
+            return
+
+        ws, dfs_path = self._analysis_file_paths[file_name]
+
+        analysis_pane = self.query_one("#tab-analysis", TabPane)
+        for child in list(analysis_pane.children):
+            child.remove()
+        await analysis_pane.mount(
+            Static(
+                f"[dim]Analysing {esc(file_name)}…[/dim]",
+                classes="detail-section",
+            )
+        )
+
+        try:
+            result = await self.client.delta.analyze_parquet_file(ws, dfs_path)
+
+            if self._current_table_data is not table_data:
+                return
+
+            for child in list(analysis_pane.children):
+                child.remove()
+
+            await analysis_pane.mount(
+                Button("← Back to Overview", id="run-analysis", variant="default")
+            )
+            await analysis_pane.mount(
+                Label(f"📄 {file_name}", classes="detail-title")
+            )
+            await self._render_analysis_in_pane(analysis_pane, result)
+
+        except Exception as e:
+            for child in list(analysis_pane.children):
+                child.remove()
+            self.notify(
+                f"File analysis failed: {e}", severity="error", markup=False
+            )
+            await analysis_pane.mount(
+                Button("← Back to Overview", id="run-analysis", variant="default")
+            )
+
+    async def _render_analysis_in_pane(self, pane, result) -> None:
+        """Render single-file analysis inside a TabPane."""
+        s = result.summary
+        await pane.mount(
+            Static(
+                f"[b]Rows:[/b] {s.total_rows:,}  "
+                f"[b]Row Groups:[/b] {s.total_row_groups}",
+                classes="detail-section",
+            )
+        )
+        await pane.mount(
+            Static(
+                f"[b]Compressed:[/b] {_format_size(s.total_compressed_size)}  "
+                f"[b]Uncompressed:[/b] {_format_size(s.total_uncompressed_size)}",
+                classes="detail-section",
+            )
+        )
+        if s.total_row_groups > 1:
+            await pane.mount(
+                Static(
+                    f"[b]Rows/RG:[/b] avg {s.avg_rows_per_row_group:,.0f} · "
+                    f"min {s.min_rows_per_row_group:,} · "
+                    f"max {s.max_rows_per_row_group:,}",
+                    classes="detail-section",
+                )
+            )
+            await pane.mount(Label("Row Groups", classes="detail-title"))
+            rg_table = DataTable()
+            await pane.mount(rg_table)
+            rg_table.add_columns(
+                "RG", "Rows", "Compressed", "Uncompressed", "Ratio"
+            )
+            for rg in result.row_groups:
+                rg_table.add_row(
+                    str(rg.row_group_id),
+                    f"{rg.row_count:,}",
+                    _format_size(rg.compressed_size),
+                    _format_size(rg.uncompressed_size),
+                    f"{rg.compression_ratio:.1%}",
+                )
+
+        if result.columns:
+            await pane.mount(Label("Columns", classes="detail-title"))
+            col_table = DataTable()
+            await pane.mount(col_table)
+            col_table.add_columns(
+                "Col", "Name", "Type", "Compressed", "Uncompressed", "% of File"
+            )
+            col_types: dict[str, str] = {}
+            for cc in result.column_chunks:
+                if cc.column_name not in col_types:
+                    col_types[cc.column_name] = cc.physical_type
+            for c in result.columns:
+                col_table.add_row(
+                    str(c.column_id),
+                    esc(c.column_name),
+                    col_types.get(c.column_name, ""),
+                    _format_size(c.total_compressed_size),
+                    _format_size(c.total_uncompressed_size),
+                    f"{c.pct_of_table:.1%}",
+                )
 
     @work(group="detail_aux", exclusive=True)
     async def _analyze_parquet_file(self) -> None:

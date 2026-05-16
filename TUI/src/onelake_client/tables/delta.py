@@ -197,6 +197,7 @@ def _build_analysis_result(
     all_column_chunks: list[ColumnChunkInfo],
     column_agg: dict[str, dict],
     files_skipped: int = 0,
+    file_paths: dict[str, tuple[str, str]] | None = None,
 ) -> DeltaAnalysisResult:
     """Build a DeltaAnalysisResult from collected stats."""
     total_rows = sum(f.row_count for f in all_files)
@@ -243,6 +244,7 @@ def _build_analysis_result(
         row_groups=all_row_groups,
         column_chunks=all_column_chunks,
         columns=columns,
+        file_paths=file_paths or {},
     )
 
 
@@ -981,10 +983,12 @@ class DeltaTableReader:
         all_row_groups: list[RowGroupInfo] = []
         all_column_chunks: list[ColumnChunkInfo] = []
         column_agg: dict[str, dict] = {}
+        file_paths: dict[str, tuple[str, str]] = {}
 
         for idx, uri in enumerate(file_uris):
             ws_guid, file_path = _parse_dfs_path(uri)
             file_name = file_path.split("/")[-1]
+            file_paths[file_name] = (ws_guid, file_path)
 
             if progress_callback:
                 await progress_callback(idx + 1, len(file_uris), file_name)
@@ -1023,7 +1027,8 @@ class DeltaTableReader:
                 column_agg[name]["uncompressed"] += agg["uncompressed"]
 
         return _build_analysis_result(
-            all_files, all_row_groups, all_column_chunks, column_agg, files_skipped
+            all_files, all_row_groups, all_column_chunks, column_agg,
+            files_skipped, file_paths,
         )
 
     async def analyze_parquet_file(
