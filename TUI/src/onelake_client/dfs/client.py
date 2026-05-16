@@ -334,8 +334,25 @@ class DfsClient:
 
         client = await self._get_client()
         headers = _dfs_headers(await self._auth.dfs_headers_async())
-        headers["Range"] = range_value
         url = f"{self._base_url}/{workspace}/{path}"
+
+        # When max_bytes is set, check file size with HEAD first.
+        # OneLake DFS ignores Range headers and returns the full file as 200,
+        # so we must reject large files BEFORE downloading the body.
+        if max_bytes is not None:
+            head_response = await request_with_retry(
+                client, "HEAD", url, headers=headers, on_auth_error=self._on_auth_error
+            )
+            content_length = head_response.headers.get("Content-Length")
+            if content_length is not None:
+                try:
+                    size = int(content_length)
+                except ValueError:
+                    size = None
+                if size is not None and size > max_bytes:
+                    raise FileTooLargeError(size=size, max_bytes=max_bytes)
+
+        headers["Range"] = range_value
 
         response = await request_with_retry(
             client, "GET", url, headers=headers, on_auth_error=self._on_auth_error
@@ -345,8 +362,6 @@ class DfsClient:
         # (valid per RFC 7233 §4.4 — server MAY ignore Range and send 200).
         if response.status_code == 200:
             logger.debug("Range request returned 200 (full file) instead of 206 for %s", path)
-            if max_bytes is not None and len(response.content) > max_bytes:
-                raise FileTooLargeError(size=len(response.content), max_bytes=max_bytes)
         elif response.status_code != 206:
             raise ApiError(
                 response.status_code,

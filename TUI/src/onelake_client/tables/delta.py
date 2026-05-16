@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 from deltalake.exceptions import DeltaError
 
+from onelake_client.exceptions import FileTooLargeError
 from onelake_client.models.table import (
     Column,
     ColumnChunkInfo,
@@ -991,9 +992,17 @@ class DeltaTableReader:
             if progress_callback:
                 await progress_callback(idx + 1, len(file_uris), file_name)
 
-            tail = await self._dfs.read_file_range(
-                ws_guid, file_path, suffix_length=_INITIAL_TAIL, max_bytes=_MAX_FOOTER_BYTES
-            )
+            try:
+                tail = await self._dfs.read_file_range(
+                    ws_guid, file_path, suffix_length=_INITIAL_TAIL, max_bytes=_MAX_FOOTER_BYTES
+                )
+            except FileTooLargeError:
+                logger.warning(
+                    "Skipping %s — file exceeds %d byte safety limit",
+                    file_name,
+                    _MAX_FOOTER_BYTES,
+                )
+                continue
 
             metadata = _parse_parquet_footer(tail)
             if metadata is None and len(tail) >= 8 and tail[-4:] == _PARQUET_MAGIC:
