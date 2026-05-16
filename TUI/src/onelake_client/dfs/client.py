@@ -323,11 +323,16 @@ class DfsClient:
             client, "GET", url, headers=headers, on_auth_error=self._on_auth_error
         )
 
-        if response.status_code != 206:
+        # 206 = server honoured the Range; 200 = server returned the full file
+        # (valid per RFC 7233 §4.4 — server MAY ignore Range and send 200).
+        if response.status_code == 200:
+            logger.debug(
+                "Range request returned 200 (full file) instead of 206 for %s", path
+            )
+        elif response.status_code != 206:
             raise ApiError(
                 response.status_code,
-                message=f"Range request returned {response.status_code} instead of 206 — "
-                "server may not support Range requests for this endpoint",
+                message=f"Range request returned {response.status_code} instead of 206",
             )
 
         return response.content

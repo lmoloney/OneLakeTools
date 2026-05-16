@@ -317,19 +317,20 @@ async def test_read_file_range_offset_only(httpx_mock, auth):
     await client.close()
 
 
-async def test_read_file_range_rejects_200(httpx_mock, auth):
-    """Server returning 200 instead of 206 should raise ApiError."""
-    from onelake_client.exceptions import ApiError
+async def test_read_file_range_accepts_200(httpx_mock, auth):
+    """Server returning 200 (full file) instead of 206 should still succeed.
 
+    Per RFC 7233 §4.4 a server MAY ignore the Range header and return 200.
+    OneLake DFS does this for small files.
+    """
     url = f"{BASE_URL}/my-workspace/MyLakehouse.Lakehouse/Files/data.parquet"
     httpx_mock.add_response(url=url, status_code=200, content=b"full file contents")
 
     client = DfsClient(auth)
-    with pytest.raises(ApiError) as exc_info:
-        await client.read_file_range(
-            "my-workspace", "MyLakehouse.Lakehouse/Files/data.parquet", suffix_length=1024
-        )
-    assert exc_info.value.status_code == 200
+    result = await client.read_file_range(
+        "my-workspace", "MyLakehouse.Lakehouse/Files/data.parquet", suffix_length=1024
+    )
+    assert result == b"full file contents"
     await client.close()
 
 
