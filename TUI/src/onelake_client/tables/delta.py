@@ -983,6 +983,7 @@ class DeltaTableReader:
         all_column_chunks: list[ColumnChunkInfo] = []
         column_agg: dict[str, dict] = {}
         file_paths: dict[str, tuple[str, str]] = {}
+        files_skipped_analysis = 0
 
         for idx, uri in enumerate(file_uris):
             ws_guid, file_path = _parse_dfs_path(uri)
@@ -1002,6 +1003,7 @@ class DeltaTableReader:
                     file_name,
                     _MAX_FOOTER_BYTES,
                 )
+                files_skipped_analysis += 1
                 continue
 
             metadata = _parse_parquet_footer(tail)
@@ -1012,6 +1014,7 @@ class DeltaTableReader:
                     logger.warning(
                         "Skipping %s — footer too large (%d bytes)", file_name, footer_len
                     )
+                    files_skipped_analysis += 1
                     continue
                 tail = await self._dfs.read_file_range(
                     ws_guid, file_path, suffix_length=footer_len + 8, max_bytes=_MAX_FOOTER_BYTES
@@ -1020,6 +1023,7 @@ class DeltaTableReader:
 
             if metadata is None:
                 logger.warning("Skipping %s — not a valid parquet file", file_name)
+                files_skipped_analysis += 1
                 continue
 
             fi, rgs, ccs, col_agg = _extract_file_stats(metadata, file_name, phys_to_logical)
@@ -1041,7 +1045,7 @@ class DeltaTableReader:
             all_row_groups,
             all_column_chunks,
             column_agg,
-            files_skipped,
+            files_skipped + files_skipped_analysis,
             file_paths,
         )
 

@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- Range read support (`read_file_range`) for DFS client — suffix, offset+length, and offset-only byte range requests with 206 validation (#26)
+- Range read support (`read_file_range`) for DFS client — suffix, offset+length, and offset-only byte range requests, handles both 200 and 206 responses (#26)
 - Delta Analysis engine — reads parquet footers via Range requests and aggregates row group, column chunk, and column-level statistics (#28)
 - Analysis tab in table detail view — lazy-loaded analysis of parquet file statistics with per-file progress (#29)
 
