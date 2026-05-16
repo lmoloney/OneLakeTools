@@ -258,8 +258,8 @@ class TestNoCdfTableView:
             assert "tab-cdf" not in pane_ids, (
                 f"CDF tab should NOT appear without enableChangeDataFeed. Found panes: {pane_ids}"
             )
-            assert len(panes) == 3, (
-                f"Expected exactly 3 tabs (Schema, Data, History). Found {len(panes)}"
+            assert len(panes) == 4, (
+                f"Expected exactly 4 tabs (Schema, Data, History, Analysis). Found {len(panes)}"
             )
         finally:
             await ctx.__aexit__(None, None, None)
