@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Schema tab showing `PrimitiveType("string")` instead of `string` for deltalake >= 1.0 (#28)
+- Range read requests now accept HTTP 200 responses (OneLake DFS returns full file instead of 206 Partial Content per RFC 7233 §4.4)
 
 ## [0.5.0] - 2026-05-16
 
