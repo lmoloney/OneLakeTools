@@ -200,3 +200,50 @@ async def test_progress_callback_called(client, workspace_id, lakehouse_id):
     for i, (current, total, _) in enumerate(progress_calls):
         assert current == i + 1
         assert total > 0
+
+
+# ── Part 4: Multi-row-group table ──────────────────────────────────────
+
+
+class TestMultiRowGroupAnalysis:
+    """Table written with tiny parquet.block.size to force multiple RGs per file.
+
+    Requires the multi_row_group table created via setup_test_tables.py.
+    """
+
+    @pytest.fixture
+    async def analysis(self, client, workspace_id, lakehouse_id, manifest):
+        features = manifest["items"]["lakehouse_simple"]["delta_features"]
+        if "multi_row_group" not in features:
+            pytest.skip("multi_row_group table not in manifest")
+        return await client.delta.get_analysis(
+            workspace_id, lakehouse_id, "multi_row_group", max_files=5
+        )
+
+    async def test_has_multiple_row_groups(self, analysis):
+        """At least one file should have multiple row groups."""
+        multi_rg_files = [f for f in analysis.files if f.row_group_count > 1]
+        assert len(multi_rg_files) > 0, (
+            f"Expected at least one multi-RG file. Got: "
+            f"{[(f.file_name, f.row_group_count) for f in analysis.files]}"
+        )
+
+    async def test_row_groups_exceed_file_count(self, analysis):
+        """Total row groups should exceed total files."""
+        assert analysis.summary.total_row_groups > analysis.summary.total_files
+
+    async def test_row_counts_consistent(self, analysis):
+        """Sum of row group rows should equal file rows should equal summary total."""
+        file_rows = sum(f.row_count for f in analysis.files)
+        rg_rows = sum(rg.row_count for rg in analysis.row_groups)
+        assert file_rows == analysis.summary.total_rows
+        assert rg_rows == analysis.summary.total_rows
+
+    async def test_column_chunks_span_multiple_rgs(self, analysis):
+        """Column chunks should cover all RGs, not just one per file."""
+        assert len(analysis.column_chunks) > len(analysis.columns)
+
+    async def test_expected_columns(self, analysis):
+        col_names = {c.column_name for c in analysis.columns}
+        for expected in ("id", "category", "value", "description"):
+            assert expected in col_names, f"Missing column: {expected}"

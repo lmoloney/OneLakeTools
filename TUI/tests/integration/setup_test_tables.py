@@ -104,9 +104,82 @@ print(f"CDF enabled: {cdf_prop}")
 print(f"Row count: {spark.table('cdf_tracking').count()}")
 """
 
+# ── Multi-row-group table ───────────────────────────────────────────────
+#
+# Fabric Spark defaults to 128 MB parquet.block.size, so small tables
+# get a single row group per file. To exercise multi-RG analysis code
+# paths, we lower the block size to 512 bytes and write ~1000 rows
+# into a single file (coalesce(1)). This forces Spark to split into
+# multiple row groups within one file.
+
+MULTI_ROW_GROUP_CELLS = """
+# Cell 1: Create multi_row_group table with tiny parquet block size
+# ─────────────────────────────────────────────────────────────────────
+
+spark.sql('DROP TABLE IF EXISTS multi_row_group')
+
+spark.sql('''
+    CREATE TABLE multi_row_group (
+        id INT,
+        category STRING,
+        value DOUBLE,
+        description STRING
+    )
+    USING DELTA
+''')
+
+# Cell 2: Write ~1000 rows into a single file with 512-byte block size
+# ─────────────────────────────────────────────────────────────────────
+# The tiny block size forces multiple row groups per file.
+
+from pyspark.sql.functions import expr
+
+df = spark.range(1000).select(
+    expr("CAST(id AS INT) AS id"),
+    expr(
+        "CASE WHEN id % 3 = 0 THEN 'alpha' "
+        "WHEN id % 3 = 1 THEN 'beta' "
+        "ELSE 'gamma' END AS category"
+    ),
+    expr("CAST(id * 1.5 AS DOUBLE) AS value"),
+    expr("CONCAT('Item number ', CAST(id AS STRING), ' in the catalog') AS description"),
+)
+
+# Coalesce to 1 file, set tiny block size to force multiple row groups
+(df.coalesce(1)
+   .write
+   .option("parquet.block.size", "512")
+   .mode("append")
+   .format("delta")
+   .saveAsTable("multi_row_group"))
+
+# Cell 3: Verify multi-row-group structure
+# ─────────────────────────────────────────────────────────────────────
+
+from delta.tables import DeltaTable
+dt = DeltaTable.forName(spark, "multi_row_group")
+print(f"Version: {dt.history().count() - 1}")
+print(f"Files: {len(dt.toDF().inputFiles())}")
+print(f"Row count: {spark.table('multi_row_group').count()}")
+
+# Check parquet row groups (run this to verify multi-RG)
+import pyspark.sql.functions as F
+files = dt.toDF().inputFiles()
+for f in files:
+    pdf = spark.read.parquet(f)
+    print(f"File {f.split('/')[-1]}: rows={pdf.count()}")
+"""
+
 if __name__ == "__main__":
     print("This script provides PySpark cell content for Fabric notebooks.")
     print("Copy the cells from NOTEBOOK_CELLS into a Fabric notebook to create test tables.")
     print()
-    print("─" * 70)
+    print("═" * 70)
+    print("SECTION 1: CDF tracking table")
+    print("═" * 70)
     print(NOTEBOOK_CELLS)
+    print()
+    print("═" * 70)
+    print("SECTION 2: Multi-row-group table")
+    print("═" * 70)
+    print(MULTI_ROW_GROUP_CELLS)

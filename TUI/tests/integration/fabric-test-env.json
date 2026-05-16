@@ -33,7 +33,8 @@
         "liquid_clustered",
         "generated_and_checks",
         "schema_evolution_type",
-        "large_customers"
+        "large_customers",
+        "multi_row_group"
       ],
       "expected_files": [
         "Files/sample.csv",
@@ -141,6 +142,15 @@
           "min_version": 2,
           "total_rows": 9900000,
           "notes": "Large table (420 MB, 9.9M rows) copied from Demos workspace precooked_standard_table. Used for size-limit and streaming tests. TODO: Replace with Spark-provisioned deterministic test data."
+        },
+        "multi_row_group": {
+          "reader_version": 1,
+          "writer_version": 2,
+          "partition_columns": [],
+          "expected_columns": ["id", "category", "value", "description"],
+          "total_rows": 1000,
+          "multi_row_groups": true,
+          "notes": "Written with parquet.block.size=512 and coalesce(1) to force multiple row groups per file. Used to test analysis across row groups within a single parquet file."
         }
       },
       "notes": "Simple lakehouse without schema folders. Tables directly under Tables/. Includes: all data types, partitioned table, CDF-enabled, OPTIMIZE+ZORDER, high-version with checkpoint, timestamp edge cases, in-commit timestamps, deletion vectors, schema evolution, column mapping, liquid clustering, generated columns and check constraints, large table (420 MB, 9.9M rows). Files include unicode paths, spaces, parentheses, ampersands, and a standalone large parquet (81 MB)."

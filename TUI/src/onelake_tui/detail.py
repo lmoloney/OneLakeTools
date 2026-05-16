@@ -105,6 +105,7 @@ class DetailPanel(VerticalScroll):
         self._workspace_name: str = ""
         self._item_name: str = ""
         self._current_table_data: TableNode | None = None
+        self._current_file_data: FileNode | None = None
         self._current_delta_info = None
         self._data_preview_loaded: bool = False
         self._debounce_timer = None
@@ -142,6 +143,7 @@ class DetailPanel(VerticalScroll):
     def _clear(self) -> None:
         """Remove all children."""
         self._current_table_data = None
+        self._current_file_data = None
         self._current_delta_info = None
         self._data_preview_loaded = False
         self.remove_children()
@@ -160,6 +162,7 @@ class DetailPanel(VerticalScroll):
 
     def _show_file(self, data: FileNode) -> None:
         self._clear()
+        self._current_file_data = data
         file_name = data.path.split("/")[-1]
         self.mount(Label(f"📄 {file_name}", classes="detail-title"))
         rel = data.path.split("/", 1)[-1] if "/" in data.path else data.path
@@ -189,6 +192,17 @@ class DetailPanel(VerticalScroll):
                 )
         except Exception as e:
             logger.debug("Could not load file properties: %s", e)
+
+        # Offer parquet analysis for .parquet files
+        file_name = data.path.split("/")[-1]
+        if file_name.endswith(".parquet"):
+            self.mount(
+                Button(
+                    "Analyze Parquet",
+                    id="analyze-parquet-file",
+                    variant="primary",
+                )
+            )
 
     # ── Delta table tabbed view ─────────────────────────────────────────
 
@@ -544,6 +558,8 @@ class DetailPanel(VerticalScroll):
             self._search_cdf_range()
         elif event.button.id == "run-analysis":
             self._load_analysis()
+        elif event.button.id == "analyze-parquet-file":
+            self._analyze_parquet_file()
 
     @work(group="detail_aux", exclusive=True)
     async def _load_data_preview(self) -> None:
@@ -1057,6 +1073,110 @@ class DetailPanel(VerticalScroll):
                 col_table.add_row(
                     str(c.column_id),
                     esc(c.column_name),
+                    _format_size(c.total_compressed_size),
+                    _format_size(c.total_uncompressed_size),
+                    f"{c.pct_of_table:.1%}",
+                )
+
+    # ── Parquet file analysis ──────────────────────────────────────────────
+
+    @work(group="detail_aux", exclusive=True)
+    async def _analyze_parquet_file(self) -> None:
+        """Analyse a standalone parquet file by reading its footer."""
+        file_data = self._current_file_data
+        if file_data is None:
+            return
+
+        with contextlib.suppress(NoMatches):
+            self.query_one("#analyze-parquet-file", Button).remove()
+
+        self.mount(
+            Static(
+                "[dim]Reading parquet footer…[/dim]",
+                id="parquet-analysis-progress",
+                classes="detail-section",
+            )
+        )
+
+        try:
+            result = await self.client.delta.analyze_parquet_file(
+                file_data.workspace, file_data.path
+            )
+
+            if self._current_file_data is not file_data:
+                return
+
+            with contextlib.suppress(NoMatches):
+                self.query_one("#parquet-analysis-progress", Static).remove()
+
+            # Render inline (no TabPane — file view is flat)
+            await self._render_analysis_inline(result)
+
+        except Exception as e:
+            with contextlib.suppress(NoMatches):
+                self.query_one("#parquet-analysis-progress", Static).remove()
+            self.notify(f"Parquet analysis failed: {e}", severity="error", markup=False)
+            logger.exception("Parquet analysis failed for %s", file_data.path)
+
+    async def _render_analysis_inline(self, result) -> None:
+        """Render analysis results inline (for standalone parquet files)."""
+        s = result.summary
+
+        self.mount(Label("Analysis", classes="detail-title"))
+        self.mount(
+            Static(
+                f"[b]Rows:[/b] {s.total_rows:,}  "
+                f"[b]Row Groups:[/b] {s.total_row_groups}",
+                classes="detail-section",
+            )
+        )
+        self.mount(
+            Static(
+                f"[b]Compressed:[/b] {_format_size(s.total_compressed_size)}  "
+                f"[b]Uncompressed:[/b] {_format_size(s.total_uncompressed_size)}",
+                classes="detail-section",
+            )
+        )
+        if s.total_row_groups > 1:
+            self.mount(
+                Static(
+                    f"[b]Rows/RG:[/b] avg {s.avg_rows_per_row_group:,.0f} · "
+                    f"min {s.min_rows_per_row_group:,} · max {s.max_rows_per_row_group:,}",
+                    classes="detail-section",
+                )
+            )
+
+        if result.row_groups and s.total_row_groups > 1:
+            self.mount(Label("Row Groups", classes="detail-title"))
+            rg_table = DataTable()
+            self.mount(rg_table)
+            rg_table.add_columns("RG", "Rows", "Compressed", "Uncompressed", "Ratio")
+            for rg in result.row_groups:
+                rg_table.add_row(
+                    str(rg.row_group_id),
+                    f"{rg.row_count:,}",
+                    _format_size(rg.compressed_size),
+                    _format_size(rg.uncompressed_size),
+                    f"{rg.compression_ratio:.1%}",
+                )
+
+        if result.columns:
+            self.mount(Label("Columns", classes="detail-title"))
+            col_table = DataTable()
+            self.mount(col_table)
+            col_table.add_columns(
+                "Col", "Name", "Type", "Compressed", "Uncompressed", "% of File"
+            )
+            # Get type from column chunks (first occurrence of each column)
+            col_types: dict[str, str] = {}
+            for cc in result.column_chunks:
+                if cc.column_name not in col_types:
+                    col_types[cc.column_name] = cc.physical_type
+            for c in result.columns:
+                col_table.add_row(
+                    str(c.column_id),
+                    esc(c.column_name),
+                    col_types.get(c.column_name, ""),
                     _format_size(c.total_compressed_size),
                     _format_size(c.total_uncompressed_size),
                     f"{c.pct_of_table:.1%}",

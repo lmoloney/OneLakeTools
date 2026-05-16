@@ -77,6 +77,175 @@ def _parse_dfs_path(uri: str) -> tuple[str, str]:
     return account, path
 
 
+_PARQUET_MAGIC = b"PAR1"
+
+
+def _parse_parquet_footer(raw_bytes: bytes):
+    """Parse parquet footer from file bytes and return pyarrow metadata.
+
+    Accepts either a full file or a tail buffer. Reconstructs a minimal
+    in-memory parquet file that pyarrow can parse for metadata-only access.
+
+    Returns:
+        A ``pyarrow.parquet.ParquetFile.metadata`` object, or None if
+        the bytes are not a valid parquet file.
+    """
+    import pyarrow.parquet as pq
+
+    if len(raw_bytes) < 8 or raw_bytes[-4:] != _PARQUET_MAGIC:
+        return None
+
+    footer_len = struct.unpack("<I", raw_bytes[-8:-4])[0]
+    if footer_len + 8 > len(raw_bytes):
+        return None
+
+    footer_content = raw_bytes[-(footer_len + 8) : -8]
+    fake_buf = (
+        _PARQUET_MAGIC
+        + footer_content
+        + struct.pack("<I", footer_len)
+        + _PARQUET_MAGIC
+    )
+    pf = pq.ParquetFile(io.BytesIO(fake_buf))
+    return pf.metadata
+
+
+def _extract_file_stats(
+    metadata,
+    file_name: str,
+    col_name_map: dict[str, str] | None = None,
+) -> tuple[ParquetFileInfo, list[RowGroupInfo], list[ColumnChunkInfo], dict[str, dict]]:
+    """Extract analysis stats from parquet file metadata.
+
+    Args:
+        metadata: pyarrow parquet FileMetaData object.
+        file_name: Display name for the file.
+        col_name_map: Optional physical→logical column name mapping.
+
+    Returns:
+        (file_info, row_groups, column_chunks, column_agg_dict)
+    """
+    if col_name_map is None:
+        col_name_map = {}
+
+    file_rows = metadata.num_rows
+    file_info = ParquetFileInfo(
+        file_name=file_name,
+        row_count=file_rows,
+        row_group_count=metadata.num_row_groups,
+        created_by=metadata.created_by,
+    )
+
+    row_groups: list[RowGroupInfo] = []
+    column_chunks: list[ColumnChunkInfo] = []
+    column_agg: dict[str, dict] = {}
+
+    for rg_idx in range(metadata.num_row_groups):
+        rg = metadata.row_group(rg_idx)
+        compressed = sum(
+            rg.column(c).total_compressed_size for c in range(rg.num_columns)
+        )
+        uncompressed = rg.total_byte_size
+        ratio = compressed / uncompressed if uncompressed > 0 else 0.0
+
+        row_groups.append(
+            RowGroupInfo(
+                file_name=file_name,
+                row_group_id=rg_idx + 1,
+                row_count=rg.num_rows,
+                compressed_size=compressed,
+                uncompressed_size=uncompressed,
+                compression_ratio=ratio,
+            )
+        )
+
+        for col_idx in range(rg.num_columns):
+            cc = rg.column(col_idx)
+            col_path = cc.path_in_schema
+            col_name = col_name_map.get(col_path, col_path)
+
+            column_chunks.append(
+                ColumnChunkInfo(
+                    file_name=file_name,
+                    row_group_id=rg_idx + 1,
+                    column_id=col_idx + 1,
+                    column_name=col_name,
+                    physical_type=str(cc.physical_type),
+                    compressed_size=cc.total_compressed_size,
+                    uncompressed_size=cc.total_uncompressed_size,
+                    num_values=cc.num_values,
+                    dictionary_page_size=cc.dictionary_page_offset or 0,
+                    encodings=list(cc.encodings) if hasattr(cc, "encodings") else [],
+                )
+            )
+
+            if col_name not in column_agg:
+                column_agg[col_name] = {
+                    "compressed": 0,
+                    "uncompressed": 0,
+                    "col_idx": col_idx + 1,
+                }
+            column_agg[col_name]["compressed"] += cc.total_compressed_size
+            column_agg[col_name]["uncompressed"] += cc.total_uncompressed_size
+
+    return file_info, row_groups, column_chunks, column_agg
+
+
+def _build_analysis_result(
+    all_files: list[ParquetFileInfo],
+    all_row_groups: list[RowGroupInfo],
+    all_column_chunks: list[ColumnChunkInfo],
+    column_agg: dict[str, dict],
+    files_skipped: int = 0,
+) -> DeltaAnalysisResult:
+    """Build a DeltaAnalysisResult from collected stats."""
+    total_rows = sum(f.row_count for f in all_files)
+    total_compressed = sum(v["compressed"] for v in column_agg.values())
+
+    columns: list[ColumnInfo] = []
+    for name, agg in column_agg.items():
+        columns.append(
+            ColumnInfo(
+                column_id=agg["col_idx"],
+                column_name=name,
+                total_compressed_size=agg["compressed"],
+                total_uncompressed_size=agg["uncompressed"],
+                total_table_rows=total_rows,
+                pct_of_table=(
+                    agg["compressed"] / total_compressed if total_compressed > 0 else 0.0
+                ),
+            )
+        )
+
+    for f in all_files:
+        f.total_table_rows = total_rows
+    for rg in all_row_groups:
+        rg.total_table_rows = total_rows
+
+    rg_row_counts = [rg.row_count for rg in all_row_groups]
+    summary = DeltaAnalysisSummary(
+        total_rows=total_rows,
+        total_files=len(all_files),
+        total_row_groups=len(all_row_groups),
+        avg_rows_per_row_group=(
+            total_rows / len(all_row_groups) if all_row_groups else 0
+        ),
+        min_rows_per_row_group=min(rg_row_counts) if rg_row_counts else 0,
+        max_rows_per_row_group=max(rg_row_counts) if rg_row_counts else 0,
+        total_compressed_size=total_compressed,
+        total_uncompressed_size=sum(v["uncompressed"] for v in column_agg.values()),
+        files_skipped=files_skipped,
+    )
+
+    return DeltaAnalysisResult(
+        summary=summary,
+        files=all_files,
+        row_groups=all_row_groups,
+        column_chunks=all_column_chunks,
+        columns=columns,
+    )
+
+
 def _schema_to_columns(schema) -> list[Column]:
     """Convert a deltalake Schema to our Column model."""
     columns: list[Column] = []
@@ -793,9 +962,6 @@ class DeltaTableReader:
                 "DfsClient required for get_analysis() — pass dfs_client to constructor"
             )
 
-        import pyarrow.parquet as pq
-
-        _PARQUET_MAGIC = b"PAR1"
         _INITIAL_TAIL = 64 * 1024  # 64 KB
 
         file_uris = await self.list_files(workspace, item_path, table_name)
@@ -815,7 +981,6 @@ class DeltaTableReader:
         all_row_groups: list[RowGroupInfo] = []
         all_column_chunks: list[ColumnChunkInfo] = []
         column_agg: dict[str, dict] = {}
-        total_rows = 0
 
         for idx, uri in enumerate(file_uris):
             ws_guid, file_path = _parse_dfs_path(uri)
@@ -824,137 +989,84 @@ class DeltaTableReader:
             if progress_callback:
                 await progress_callback(idx + 1, len(file_uris), file_name)
 
-            # Tail read for parquet footer
             tail = await self._dfs.read_file_range(
                 ws_guid, file_path, suffix_length=_INITIAL_TAIL
             )
 
-            if len(tail) < 8 or tail[-4:] != _PARQUET_MAGIC:
-                logger.warning("Skipping %s — not a valid parquet file", file_name)
-                continue
-
-            footer_len = struct.unpack("<I", tail[-8:-4])[0]
-
-            if footer_len + 8 > len(tail):
+            metadata = _parse_parquet_footer(tail)
+            if metadata is None and len(tail) >= 8 and tail[-4:] == _PARQUET_MAGIC:
+                # Footer didn't fit in initial tail — try larger read
+                footer_len = struct.unpack("<I", tail[-8:-4])[0]
                 tail = await self._dfs.read_file_range(
                     ws_guid, file_path, suffix_length=footer_len + 8
                 )
+                metadata = _parse_parquet_footer(tail)
 
-            footer_content = tail[-(footer_len + 8) : -8]
+            if metadata is None:
+                logger.warning("Skipping %s — not a valid parquet file", file_name)
+                continue
 
-            # Reconstruct a minimal in-memory parquet file (header + footer)
-            fake_buf = (
-                _PARQUET_MAGIC
-                + footer_content
-                + struct.pack("<I", footer_len)
-                + _PARQUET_MAGIC
+            fi, rgs, ccs, col_agg = _extract_file_stats(
+                metadata, file_name, phys_to_logical
             )
-            pf = pq.ParquetFile(io.BytesIO(fake_buf))
-            metadata = pf.metadata
+            all_files.append(fi)
+            all_row_groups.extend(rgs)
+            all_column_chunks.extend(ccs)
+            for name, agg in col_agg.items():
+                if name not in column_agg:
+                    column_agg[name] = {
+                        "compressed": 0,
+                        "uncompressed": 0,
+                        "col_idx": agg["col_idx"],
+                    }
+                column_agg[name]["compressed"] += agg["compressed"]
+                column_agg[name]["uncompressed"] += agg["uncompressed"]
 
-            file_rows = metadata.num_rows
-            total_rows += file_rows
-
-            all_files.append(
-                ParquetFileInfo(
-                    file_name=file_name,
-                    row_count=file_rows,
-                    row_group_count=metadata.num_row_groups,
-                    created_by=metadata.created_by,
-                )
-            )
-
-            for rg_idx in range(metadata.num_row_groups):
-                rg = metadata.row_group(rg_idx)
-                compressed = sum(
-                    rg.column(c).total_compressed_size for c in range(rg.num_columns)
-                )
-                uncompressed = rg.total_byte_size
-                ratio = compressed / uncompressed if uncompressed > 0 else 0.0
-
-                all_row_groups.append(
-                    RowGroupInfo(
-                        file_name=file_name,
-                        row_group_id=rg_idx + 1,
-                        row_count=rg.num_rows,
-                        compressed_size=compressed,
-                        uncompressed_size=uncompressed,
-                        compression_ratio=ratio,
-                    )
-                )
-
-                for col_idx in range(rg.num_columns):
-                    cc = rg.column(col_idx)
-                    col_path = cc.path_in_schema
-                    col_name = phys_to_logical.get(col_path, col_path)
-
-                    all_column_chunks.append(
-                        ColumnChunkInfo(
-                            file_name=file_name,
-                            row_group_id=rg_idx + 1,
-                            column_id=col_idx + 1,
-                            column_name=col_name,
-                            physical_type=str(cc.physical_type),
-                            compressed_size=cc.total_compressed_size,
-                            uncompressed_size=cc.total_uncompressed_size,
-                            num_values=cc.num_values,
-                            dictionary_page_size=cc.dictionary_page_offset or 0,
-                            encodings=list(cc.encodings) if hasattr(cc, "encodings") else [],
-                        )
-                    )
-
-                    if col_name not in column_agg:
-                        column_agg[col_name] = {
-                            "compressed": 0,
-                            "uncompressed": 0,
-                            "col_idx": col_idx + 1,
-                        }
-                    column_agg[col_name]["compressed"] += cc.total_compressed_size
-                    column_agg[col_name]["uncompressed"] += cc.total_uncompressed_size
-
-        # Column-level aggregation
-        total_compressed = sum(v["compressed"] for v in column_agg.values())
-        columns: list[ColumnInfo] = []
-        for name, agg in column_agg.items():
-            columns.append(
-                ColumnInfo(
-                    column_id=agg["col_idx"],
-                    column_name=name,
-                    total_compressed_size=agg["compressed"],
-                    total_uncompressed_size=agg["uncompressed"],
-                    total_table_rows=total_rows,
-                    pct_of_table=(
-                        agg["compressed"] / total_compressed if total_compressed > 0 else 0.0
-                    ),
-                )
-            )
-
-        # Back-fill total_table_rows
-        for f in all_files:
-            f.total_table_rows = total_rows
-        for rg in all_row_groups:
-            rg.total_table_rows = total_rows
-
-        # Summary
-        rg_row_counts = [rg.row_count for rg in all_row_groups]
-        summary = DeltaAnalysisSummary(
-            total_rows=total_rows,
-            total_files=len(all_files),
-            total_row_groups=len(all_row_groups),
-            avg_rows_per_row_group=(
-                total_rows / len(all_row_groups) if all_row_groups else 0
-            ),
-            min_rows_per_row_group=min(rg_row_counts) if rg_row_counts else 0,
-            max_rows_per_row_group=max(rg_row_counts) if rg_row_counts else 0,
-            total_compressed_size=total_compressed,
-            total_uncompressed_size=sum(v["uncompressed"] for v in column_agg.values()),
-            files_skipped=files_skipped,
+        return _build_analysis_result(
+            all_files, all_row_groups, all_column_chunks, column_agg, files_skipped
         )
 
-        return DeltaAnalysisResult(
-            summary=summary,
-            files=all_files,
-            row_groups=all_row_groups,
-            column_chunks=all_column_chunks,
-            columns=columns,
+    async def analyze_parquet_file(
+        self,
+        workspace: str,
+        path: str,
+    ) -> DeltaAnalysisResult:
+        """Analyse a single parquet file by reading its footer.
+
+        Unlike :meth:`get_analysis` which operates on Delta tables, this
+        method works on any standalone ``.parquet`` file (e.g. under
+        ``Files/``).
+
+        Args:
+            workspace: Workspace name or GUID.
+            path: Full DFS path to the parquet file.
+
+        Returns:
+            :class:`DeltaAnalysisResult` with a single file entry.
+        """
+        if self._dfs is None:
+            raise RuntimeError(
+                "DfsClient required for analyze_parquet_file() — "
+                "pass dfs_client to constructor"
+            )
+
+        _INITIAL_TAIL = 64 * 1024
+
+        raw = await self._dfs.read_file_range(
+            workspace, path, suffix_length=_INITIAL_TAIL
         )
+
+        metadata = _parse_parquet_footer(raw)
+        if metadata is None and len(raw) >= 8 and raw[-4:] == _PARQUET_MAGIC:
+            footer_len = struct.unpack("<I", raw[-8:-4])[0]
+            raw = await self._dfs.read_file_range(
+                workspace, path, suffix_length=footer_len + 8
+            )
+            metadata = _parse_parquet_footer(raw)
+
+        if metadata is None:
+            raise DeltaError(f"Not a valid parquet file: {path}")
+
+        file_name = path.split("/")[-1]
+        fi, rgs, ccs, col_agg = _extract_file_stats(metadata, file_name)
+        return _build_analysis_result([fi], rgs, ccs, col_agg)
