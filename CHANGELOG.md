@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-16
+
 ### Fixed
 
 - Token acquisition no longer blocks the async event loop — `FabricClient` and `DfsClient` now use async header methods that wrap blocking credential calls in `asyncio.to_thread()`
