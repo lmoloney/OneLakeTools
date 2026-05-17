@@ -1585,6 +1585,9 @@ class TestAnalysisTab:
             pane = detail.query_one("#tab-analysis", TabPane)
             tables = pane.query(DataTable)
             assert len(tables) == 0, "No DataTables should render on error"
+            # Button should be re-enabled for retry
+            btn_after = detail.query_one("#run-analysis", Button)
+            assert not btn_after.disabled, "Button should be re-enabled after failure"
         finally:
             await ctx.__aexit__(None, None, None)
 

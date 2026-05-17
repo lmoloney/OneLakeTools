@@ -420,6 +420,60 @@ async def test_read_file_range_no_max_bytes_skips_head(httpx_mock, auth):
     await client.close()
 
 
+async def test_read_file_range_max_bytes_missing_content_length(httpx_mock, auth):
+    """HEAD without Content-Length should fail closed with FileTooLargeError."""
+    from onelake_client.exceptions import FileTooLargeError
+
+    url = f"{BASE_URL}/my-workspace/MyLakehouse.Lakehouse/Files/no-cl.parquet"
+    httpx_mock.add_response(url=url, method="HEAD", headers={})
+    client = DfsClient(auth)
+    with pytest.raises(FileTooLargeError):
+        await client.read_file_range(
+            "my-workspace",
+            "MyLakehouse.Lakehouse/Files/no-cl.parquet",
+            suffix_length=1024,
+            max_bytes=1024 * 1024,
+        )
+    await client.close()
+
+
+async def test_read_file_range_negative_offset(auth):
+    """Negative offset raises ValueError."""
+    client = DfsClient(auth)
+    with pytest.raises(ValueError, match="offset must be non-negative"):
+        await client.read_file_range(
+            "my-workspace",
+            "MyLakehouse.Lakehouse/Files/data.parquet",
+            offset=-1,
+        )
+    await client.close()
+
+
+async def test_read_file_range_zero_suffix(auth):
+    """Zero suffix_length raises ValueError."""
+    client = DfsClient(auth)
+    with pytest.raises(ValueError, match="suffix_length must be positive"):
+        await client.read_file_range(
+            "my-workspace",
+            "MyLakehouse.Lakehouse/Files/data.parquet",
+            suffix_length=0,
+        )
+    await client.close()
+
+
+async def test_read_file_range_zero_length(auth):
+    """Zero length raises ValueError."""
+    client = DfsClient(auth)
+    with pytest.raises(ValueError, match="length must be positive"):
+        await client.read_file_range(
+            "my-workspace",
+            "MyLakehouse.Lakehouse/Files/data.parquet",
+            offset=0,
+            length=0,
+        )
+    await client.close()
+
+
 async def test_read_file_network_timeout(httpx_mock, auth):
     """Test that network timeout is handled during streaming."""
     import httpx
