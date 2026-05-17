@@ -349,13 +349,15 @@ class DfsClient:
                 client, "HEAD", url, headers=headers, on_auth_error=self._on_auth_error
             )
             content_length = head_response.headers.get("Content-Length")
-            if content_length is not None:
-                try:
-                    size = int(content_length)
-                except ValueError:
-                    size = None
-                if size is not None and size > max_bytes:
-                    raise FileTooLargeError(size=size, max_bytes=max_bytes)
+            if content_length is None:
+                # Fail closed — can't verify size, don't risk unbounded download
+                raise FileTooLargeError(size=0, max_bytes=max_bytes)
+            try:
+                size = int(content_length)
+            except ValueError:
+                raise FileTooLargeError(size=0, max_bytes=max_bytes) from None
+            if size > max_bytes:
+                raise FileTooLargeError(size=size, max_bytes=max_bytes)
 
         headers["Range"] = range_value
 

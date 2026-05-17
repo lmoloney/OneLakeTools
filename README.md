@@ -19,7 +19,7 @@ onelake-tui
 **Highlights:**
 - Three-panel layout: workspace picker → item list → DFS tree + preview
 - Rich file preview: Markdown, JSON, CSV, Parquet, Avro, syntax-highlighted code
-- Delta table detail: schema, data preview, transaction history, CDF
+- Delta table detail: schema, data preview, transaction history, CDF, parquet analysis
 - Live workspace search, breadcrumb path display, and copy menu (`y`) for HTTPS/ABFSS named+GUID formats
 - Multi-environment support via `--env` flag (PROD, MSIT, DXT, DAILY)
 - Keyboard-driven, zero-config (uses `az login`)
@@ -85,7 +85,7 @@ uv run onelake-tui      # Launch the TUI
 
 1. **Unit tests** (`tests/`) — mock-based, no Fabric access needed
    - Client library: auth, HTTP, DFS, Fabric API, Delta reader (protocol extraction, warnings), Iceberg, models
-   - TUI widgets: smoke, navigation flow, file previews (9 formats), table views (schema/data/history/CDF tabs), tree edge cases
+   - TUI widgets: smoke, navigation flow, file previews (9 formats), table views (schema/data/history/CDF/analysis tabs), tree edge cases
    - Fixtures: Delta tables (10 committed fixtures), Parquet files (3 fixtures)
    - Snapshots: Delta metadata + Parquet schema regression detection
 
@@ -142,7 +142,7 @@ OneLakeTools/
 |------|--------|
 | OneLake TUI (Unofficial) | ✅ Working (browse, preview, inspect, copy path) |
 | File preview (MD/JSON/CSV/Parquet/Avro) | ✅ Done |
-| Delta table detail (schema/data/history/CDF) | ✅ Done |
+| Delta table detail (schema/data/history/CDF/analysis) | ✅ Done |
 | Workspace search/filter | ✅ Done |
 | [OneLake CLI](https://github.com/lmoloney/OneLakeTools/issues/11) | 🔲 Planned (`onelake ls`, `onelake cat`, `onelake cp`) |
 | [Download/upload](https://github.com/lmoloney/OneLakeTools/issues/12) | 🔲 Planned |

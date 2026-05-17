@@ -1223,12 +1223,14 @@ class DetailPanel(VerticalScroll):
             pane = None
             in_tab = False
 
+        # Disable button during analysis (don't remove — re-enable on failure)
         with contextlib.suppress(NoMatches):
-            self.query_one("#analyze-parquet-file", Button).remove()
+            self.query_one("#analyze-parquet-file", Button).disabled = True
 
         if in_tab:
             for child in list(pane.children):
-                child.remove()
+                if not isinstance(child, Button):
+                    child.remove()
             await pane.mount(
                 Static(
                     "[dim]Reading parquet metadata…[/dim]",
@@ -1253,6 +1255,9 @@ class DetailPanel(VerticalScroll):
             if self._current_file_data is not file_data:
                 return
 
+            # Success — remove button and progress
+            with contextlib.suppress(NoMatches):
+                self.query_one("#analyze-parquet-file", Button).remove()
             with contextlib.suppress(NoMatches):
                 self.query_one("#parquet-analysis-progress", Static).remove()
 
@@ -1264,6 +1269,9 @@ class DetailPanel(VerticalScroll):
         except Exception as e:
             with contextlib.suppress(NoMatches):
                 self.query_one("#parquet-analysis-progress", Static).remove()
+            # Re-enable button for retry
+            with contextlib.suppress(NoMatches):
+                self.query_one("#analyze-parquet-file", Button).disabled = False
             self.notify(f"Parquet analysis failed: {e}", severity="error", markup=False)
             logger.exception("Parquet analysis failed for %s", file_data.path)
 

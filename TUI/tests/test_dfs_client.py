@@ -367,6 +367,59 @@ async def test_read_file_range_length_without_offset(auth):
     await client.close()
 
 
+async def test_read_file_range_max_bytes_rejects_large_file(httpx_mock, auth):
+    """HEAD pre-check should raise FileTooLargeError before GET for large files."""
+    from onelake_client.exceptions import FileTooLargeError
+
+    url = f"{BASE_URL}/my-workspace/MyLakehouse.Lakehouse/Files/huge.parquet"
+    # HEAD returns large Content-Length
+    httpx_mock.add_response(url=url, method="HEAD", headers={"Content-Length": "500000000"})
+    # GET should NOT be called
+    client = DfsClient(auth)
+    with pytest.raises(FileTooLargeError) as exc_info:
+        await client.read_file_range(
+            "my-workspace",
+            "MyLakehouse.Lakehouse/Files/huge.parquet",
+            suffix_length=1024,
+            max_bytes=1024 * 1024,
+        )
+    assert exc_info.value.size == 500_000_000
+    await client.close()
+
+
+async def test_read_file_range_max_bytes_allows_small_file(httpx_mock, auth):
+    """HEAD pre-check should allow files within max_bytes, then GET succeeds."""
+    url = f"{BASE_URL}/my-workspace/MyLakehouse.Lakehouse/Files/small.parquet"
+    httpx_mock.add_response(url=url, method="HEAD", headers={"Content-Length": "5000"})
+    httpx_mock.add_response(url=url, status_code=200, content=b"file data")
+    client = DfsClient(auth)
+    result = await client.read_file_range(
+        "my-workspace",
+        "MyLakehouse.Lakehouse/Files/small.parquet",
+        suffix_length=1024,
+        max_bytes=1024 * 1024,
+    )
+    assert result == b"file data"
+    await client.close()
+
+
+async def test_read_file_range_no_max_bytes_skips_head(httpx_mock, auth):
+    """Without max_bytes, no HEAD request should be issued."""
+    url = f"{BASE_URL}/my-workspace/MyLakehouse.Lakehouse/Files/data.parquet"
+    httpx_mock.add_response(url=url, status_code=206, content=b"partial")
+    client = DfsClient(auth)
+    result = await client.read_file_range(
+        "my-workspace",
+        "MyLakehouse.Lakehouse/Files/data.parquet",
+        suffix_length=1024,
+    )
+    assert result == b"partial"
+    # Only 1 request (GET), no HEAD
+    assert len(httpx_mock.get_requests()) == 1
+    assert httpx_mock.get_requests()[0].method == "GET"
+    await client.close()
+
+
 async def test_read_file_network_timeout(httpx_mock, auth):
     """Test that network timeout is handled during streaming."""
     import httpx
