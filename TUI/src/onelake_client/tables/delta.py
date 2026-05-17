@@ -1,18 +1,33 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
+import struct
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from deltalake.exceptions import DeltaError
 
-from onelake_client.models.table import Column, DeltaTableInfo
+from onelake_client.exceptions import ApiError as _ApiError
+from onelake_client.exceptions import FileTooLargeError
+from onelake_client.models.table import (
+    Column,
+    ColumnChunkInfo,
+    ColumnInfo,
+    DeltaAnalysisResult,
+    DeltaAnalysisSummary,
+    DeltaTableInfo,
+    ParquetFileInfo,
+    RowGroupInfo,
+)
 
 if TYPE_CHECKING:
     import pyarrow as pa
 
     from onelake_client.auth import OneLakeAuth
+    from onelake_client.dfs.client import DfsClient
     from onelake_client.fabric import FabricClient
 
 logger = logging.getLogger("onelake_client.tables.delta")
@@ -44,6 +59,194 @@ def _build_table_uri(workspace: str, item_path: str, table_name: str, dfs_host: 
     return f"abfss://{workspace}@{dfs_host}/{item_path}/Tables/{table_name}"
 
 
+def _clean_type_str(type_str: str) -> str:
+    """Clean deltalake type string representations.
+
+    deltalake >= 1.0 returns PrimitiveType("string") instead of "string".
+    """
+    s = str(type_str)
+    if s.startswith("PrimitiveType("):
+        s = s.removeprefix("PrimitiveType(").removesuffix(")")
+        s = s.strip("\"'")
+    return s
+
+
+def _parse_dfs_path(uri: str) -> tuple[str, str]:
+    """Parse an abfss URI into (workspace_guid, dfs_path)."""
+    after_scheme = uri.split("://", 1)[1]  # ws-guid@host/path
+    account, rest = after_scheme.split("@", 1)  # ws-guid, host/path
+    _, path = rest.split("/", 1)  # host, path
+    return account, path
+
+
+_PARQUET_MAGIC = b"PAR1"
+
+
+def _parse_parquet_footer(raw_bytes: bytes):
+    """Parse parquet footer from file bytes and return pyarrow metadata.
+
+    Accepts either a full file or a tail buffer. Reconstructs a minimal
+    in-memory parquet file that pyarrow can parse for metadata-only access.
+
+    Returns:
+        A ``pyarrow.parquet.ParquetFile.metadata`` object, or None if
+        the bytes are not a valid parquet file.
+    """
+    import pyarrow.parquet as pq
+
+    if len(raw_bytes) < 8 or raw_bytes[-4:] != _PARQUET_MAGIC:
+        return None
+
+    footer_len = struct.unpack("<I", raw_bytes[-8:-4])[0]
+    if footer_len + 8 > len(raw_bytes):
+        return None
+
+    footer_content = raw_bytes[-(footer_len + 8) : -8]
+    fake_buf = _PARQUET_MAGIC + footer_content + struct.pack("<I", footer_len) + _PARQUET_MAGIC
+    try:
+        pf = pq.ParquetFile(io.BytesIO(fake_buf))
+        return pf.metadata
+    except Exception:
+        logger.debug("Failed to parse parquet footer (%d bytes)", len(raw_bytes))
+        return None
+
+
+def _extract_file_stats(
+    metadata,
+    file_name: str,
+    col_name_map: dict[str, str] | None = None,
+) -> tuple[ParquetFileInfo, list[RowGroupInfo], list[ColumnChunkInfo], dict[str, dict]]:
+    """Extract analysis stats from parquet file metadata.
+
+    Args:
+        metadata: pyarrow parquet FileMetaData object.
+        file_name: Display name for the file.
+        col_name_map: Optional physical→logical column name mapping.
+
+    Returns:
+        (file_info, row_groups, column_chunks, column_agg_dict)
+    """
+    if col_name_map is None:
+        col_name_map = {}
+
+    file_rows = metadata.num_rows
+    file_info = ParquetFileInfo(
+        file_name=file_name,
+        row_count=file_rows,
+        row_group_count=metadata.num_row_groups,
+        created_by=metadata.created_by,
+    )
+
+    row_groups: list[RowGroupInfo] = []
+    column_chunks: list[ColumnChunkInfo] = []
+    column_agg: dict[str, dict] = {}
+
+    for rg_idx in range(metadata.num_row_groups):
+        rg = metadata.row_group(rg_idx)
+        compressed = sum(rg.column(c).total_compressed_size for c in range(rg.num_columns))
+        uncompressed = rg.total_byte_size
+        ratio = compressed / uncompressed if uncompressed > 0 else 0.0
+
+        row_groups.append(
+            RowGroupInfo(
+                file_name=file_name,
+                row_group_id=rg_idx + 1,
+                row_count=rg.num_rows,
+                compressed_size=compressed,
+                uncompressed_size=uncompressed,
+                compression_ratio=ratio,
+            )
+        )
+
+        for col_idx in range(rg.num_columns):
+            cc = rg.column(col_idx)
+            col_path = cc.path_in_schema
+            col_name = col_name_map.get(col_path, col_path)
+
+            column_chunks.append(
+                ColumnChunkInfo(
+                    file_name=file_name,
+                    row_group_id=rg_idx + 1,
+                    column_id=col_idx + 1,
+                    column_name=col_name,
+                    physical_type=str(cc.physical_type),
+                    compressed_size=cc.total_compressed_size,
+                    uncompressed_size=cc.total_uncompressed_size,
+                    num_values=cc.num_values,
+                    has_dictionary=(
+                        cc.dictionary_page_offset is not None and cc.dictionary_page_offset >= 0
+                    ),
+                    encodings=list(cc.encodings) if hasattr(cc, "encodings") else [],
+                )
+            )
+
+            if col_name not in column_agg:
+                column_agg[col_name] = {
+                    "compressed": 0,
+                    "uncompressed": 0,
+                    "col_idx": col_idx + 1,
+                }
+            column_agg[col_name]["compressed"] += cc.total_compressed_size
+            column_agg[col_name]["uncompressed"] += cc.total_uncompressed_size
+
+    return file_info, row_groups, column_chunks, column_agg
+
+
+def _build_analysis_result(
+    all_files: list[ParquetFileInfo],
+    all_row_groups: list[RowGroupInfo],
+    all_column_chunks: list[ColumnChunkInfo],
+    column_agg: dict[str, dict],
+    files_skipped: int = 0,
+    file_paths: dict[str, tuple[str, str]] | None = None,
+) -> DeltaAnalysisResult:
+    """Build a DeltaAnalysisResult from collected stats."""
+    total_rows = sum(f.row_count for f in all_files)
+    total_compressed = sum(v["compressed"] for v in column_agg.values())
+
+    columns: list[ColumnInfo] = []
+    for name, agg in column_agg.items():
+        columns.append(
+            ColumnInfo(
+                column_id=agg["col_idx"],
+                column_name=name,
+                total_compressed_size=agg["compressed"],
+                total_uncompressed_size=agg["uncompressed"],
+                total_table_rows=total_rows,
+                pct_of_table=(
+                    agg["compressed"] / total_compressed if total_compressed > 0 else 0.0
+                ),
+            )
+        )
+
+    for f in all_files:
+        f.total_table_rows = total_rows
+    for rg in all_row_groups:
+        rg.total_table_rows = total_rows
+
+    rg_row_counts = [rg.row_count for rg in all_row_groups]
+    summary = DeltaAnalysisSummary(
+        total_rows=total_rows,
+        total_files=len(all_files),
+        total_row_groups=len(all_row_groups),
+        avg_rows_per_row_group=(total_rows / len(all_row_groups) if all_row_groups else 0),
+        min_rows_per_row_group=min(rg_row_counts) if rg_row_counts else 0,
+        max_rows_per_row_group=max(rg_row_counts) if rg_row_counts else 0,
+        total_compressed_size=total_compressed,
+        total_uncompressed_size=sum(v["uncompressed"] for v in column_agg.values()),
+        files_skipped=files_skipped,
+    )
+
+    return DeltaAnalysisResult(
+        summary=summary,
+        files=all_files,
+        row_groups=all_row_groups,
+        column_chunks=all_column_chunks,
+        columns=columns,
+        file_paths=file_paths or {},
+    )
+
+
 def _schema_to_columns(schema) -> list[Column]:
     """Convert a deltalake Schema to our Column model."""
     columns: list[Column] = []
@@ -53,7 +256,7 @@ def _schema_to_columns(schema) -> list[Column]:
         columns.append(
             Column(
                 name=field.name,
-                type=str(field.type),
+                type=_clean_type_str(field.type),
                 nullable=field.nullable,
                 metadata=field.metadata if field.metadata else None,
             )
@@ -159,6 +362,13 @@ _METADATA_SCRIPT = """
 import sys, json
 from deltalake import DeltaTable
 
+def _clean_type(t):
+    s = str(t)
+    if s.startswith("PrimitiveType("):
+        s = s.removeprefix("PrimitiveType(").removesuffix(")")
+        s = s.strip("\\\"'")
+    return s
+
 data = json.load(sys.stdin)
 uri = data["uri"]
 storage_options = data["storage_options"]
@@ -171,7 +381,7 @@ try:
     columns = [
         {
             "name": f.name,
-            "type": str(f.type),
+            "type": _clean_type(f.type),
             "nullable": f.nullable,
             "metadata": dict(f.metadata) if f.metadata else None,
         }
@@ -344,10 +554,12 @@ class DeltaTableReader:
         auth: OneLakeAuth,
         dfs_host: str = "onelake.dfs.fabric.microsoft.com",
         fabric_client: FabricClient | None = None,
+        dfs_client: DfsClient | None = None,
     ):
         self._auth = auth
         self._dfs_host = dfs_host
         self._fabric = fabric_client
+        self._dfs = dfs_client
         self._isolate = True  # subprocess isolation for Rust panic safety
         self._guid_cache: dict[tuple[str, str], tuple[str, str]] = {}
 
@@ -718,3 +930,182 @@ class DeltaTableReader:
         uri = await self._resolve_uri(workspace, item_path, table_name)
         dt = await asyncio.to_thread(self._load_table_sync, uri)
         return dt.file_uris()
+
+    async def get_analysis(
+        self,
+        workspace: str,
+        item_path: str,
+        table_name: str,
+        *,
+        max_files: int = 20,
+        max_file_bytes: int = 100 * 1024 * 1024,
+        progress_callback: Callable[[int, int, str], Awaitable[None]] | None = None,
+    ) -> DeltaAnalysisResult:
+        """Analyse a Delta table by reading parquet footers via Range requests.
+
+        Reads the Parquet footer from each data file using suffix-range HTTP
+        requests, reconstructs the metadata in-memory, and aggregates row
+        group, column chunk, and column-level statistics.
+
+        Args:
+            workspace: Workspace name or GUID.
+            item_path: Item path like ``"MyLakehouse.Lakehouse"`` or GUID.
+            table_name: Table name under ``Tables/``.
+            max_files: Cap on how many data files to inspect.
+            max_file_bytes: Skip files larger than this (bytes).  OneLake
+                ignores Range headers and returns the full file, so this
+                prevents downloading very large files just for the footer.
+                Default 100 MB.  Skipped files are counted in
+                ``summary.files_skipped``.
+            progress_callback: Optional ``async (current, total, filename)``
+                callback for progress reporting.
+
+        Returns:
+            :class:`DeltaAnalysisResult` with summary, file, row-group,
+            column-chunk, and column-level views.
+        """
+        if self._dfs is None:
+            raise RuntimeError(
+                "DfsClient required for get_analysis() — pass dfs_client to constructor"
+            )
+
+        _INITIAL_TAIL = 64 * 1024  # 64 KB
+        _MAX_FOOTER_BYTES = 16 * 1024 * 1024  # 16 MB safety cap per file
+
+        file_uris = await self.list_files(workspace, item_path, table_name)
+        files_skipped = max(0, len(file_uris) - max_files)
+        file_uris = file_uris[:max_files]
+
+        # Build physical→logical column name mapping from Delta schema metadata
+        phys_to_logical: dict[str, str] = {}
+        meta_info = await self.get_metadata(workspace, item_path, table_name)
+        for col in meta_info.schema_:
+            if col.metadata:
+                phys = col.metadata.get("delta.columnMapping.physicalName")
+                if phys is not None:
+                    phys_to_logical[str(phys)] = col.name
+
+        all_files: list[ParquetFileInfo] = []
+        all_row_groups: list[RowGroupInfo] = []
+        all_column_chunks: list[ColumnChunkInfo] = []
+        column_agg: dict[str, dict] = {}
+        file_paths: dict[str, tuple[str, str]] = {}
+        files_skipped_analysis = 0
+
+        for idx, uri in enumerate(file_uris):
+            ws_guid, file_path = _parse_dfs_path(uri)
+            file_name = file_path.split("/")[-1]
+            file_paths[file_name] = (ws_guid, file_path)
+
+            if progress_callback:
+                await progress_callback(idx + 1, len(file_uris), file_name)
+
+            try:
+                tail = await self._dfs.read_file_range(
+                    ws_guid, file_path, suffix_length=_INITIAL_TAIL, max_bytes=max_file_bytes
+                )
+            except (FileTooLargeError, _ApiError):
+                logger.warning(
+                    "Skipping %s — file exceeds %s byte limit",
+                    file_name,
+                    max_file_bytes,
+                )
+                files_skipped_analysis += 1
+                continue
+
+            metadata = _parse_parquet_footer(tail)
+            if metadata is None and len(tail) >= 8 and tail[-4:] == _PARQUET_MAGIC:
+                # Footer didn't fit in initial tail — try larger read
+                footer_len = struct.unpack("<I", tail[-8:-4])[0]
+                if footer_len + 8 > _MAX_FOOTER_BYTES:
+                    logger.warning(
+                        "Skipping %s — footer too large (%d bytes)", file_name, footer_len
+                    )
+                    files_skipped_analysis += 1
+                    continue
+                tail = await self._dfs.read_file_range(
+                    ws_guid,
+                    file_path,
+                    suffix_length=footer_len + 8,
+                    max_bytes=max_file_bytes,
+                )
+                metadata = _parse_parquet_footer(tail)
+
+            if metadata is None:
+                logger.warning("Skipping %s — not a valid parquet file", file_name)
+                files_skipped_analysis += 1
+                continue
+
+            fi, rgs, ccs, col_agg = _extract_file_stats(metadata, file_name, phys_to_logical)
+            all_files.append(fi)
+            all_row_groups.extend(rgs)
+            all_column_chunks.extend(ccs)
+            for name, agg in col_agg.items():
+                if name not in column_agg:
+                    column_agg[name] = {
+                        "compressed": 0,
+                        "uncompressed": 0,
+                        "col_idx": agg["col_idx"],
+                    }
+                column_agg[name]["compressed"] += agg["compressed"]
+                column_agg[name]["uncompressed"] += agg["uncompressed"]
+
+        return _build_analysis_result(
+            all_files,
+            all_row_groups,
+            all_column_chunks,
+            column_agg,
+            files_skipped + files_skipped_analysis,
+            file_paths,
+        )
+
+    async def analyze_parquet_file(
+        self,
+        workspace: str,
+        path: str,
+        *,
+        max_file_bytes: int = 100 * 1024 * 1024,
+    ) -> DeltaAnalysisResult:
+        """Analyse a single parquet file by reading its footer.
+
+        Unlike :meth:`get_analysis` which operates on Delta tables, this
+        method works on any standalone ``.parquet`` file (e.g. under
+        ``Files/``).
+
+        Args:
+            workspace: Workspace name or GUID.
+            path: Full DFS path to the parquet file.
+            max_file_bytes: Reject files larger than this (bytes).
+                Default 100 MB.
+
+        Returns:
+            :class:`DeltaAnalysisResult` with a single file entry.
+        """
+        if self._dfs is None:
+            raise RuntimeError(
+                "DfsClient required for analyze_parquet_file() — pass dfs_client to constructor"
+            )
+
+        _INITIAL_TAIL = 64 * 1024
+        _MAX_FOOTER_BYTES = 16 * 1024 * 1024
+
+        raw = await self._dfs.read_file_range(
+            workspace, path, suffix_length=_INITIAL_TAIL, max_bytes=max_file_bytes
+        )
+
+        metadata = _parse_parquet_footer(raw)
+        if metadata is None and len(raw) >= 8 and raw[-4:] == _PARQUET_MAGIC:
+            footer_len = struct.unpack("<I", raw[-8:-4])[0]
+            if footer_len + 8 > _MAX_FOOTER_BYTES:
+                raise DeltaError(f"Parquet footer too large ({footer_len} bytes): {path}")
+            raw = await self._dfs.read_file_range(
+                workspace, path, suffix_length=footer_len + 8, max_bytes=max_file_bytes
+            )
+            metadata = _parse_parquet_footer(raw)
+
+        if metadata is None:
+            raise DeltaError(f"Not a valid parquet file: {path}")
+
+        file_name = path.split("/")[-1]
+        fi, rgs, ccs, col_agg = _extract_file_stats(metadata, file_name)
+        return _build_analysis_result([fi], rgs, ccs, col_agg)

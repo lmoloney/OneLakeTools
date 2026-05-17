@@ -9,6 +9,7 @@ import httpx
 
 from onelake_client._http import create_client, paginate_dfs, raise_for_status, request_with_retry
 from onelake_client.exceptions import (
+    ApiError,
     FileTooLargeError,
     NotFoundError,
 )
@@ -269,6 +270,119 @@ class DfsClient:
             on_auth_error=self._on_auth_error,
         )
         return _parse_file_properties(response)
+
+    async def read_file_range(
+        self,
+        workspace: str,
+        path: str,
+        *,
+        offset: int | None = None,
+        length: int | None = None,
+        suffix_length: int | None = None,
+        max_bytes: int | None = None,
+    ) -> bytes:
+        """Read a byte range from a file in OneLake.
+
+        Exactly one range form must be specified:
+
+        - *suffix_length* alone → ``Range: bytes=-N`` (tail read)
+        - *offset* + *length* → ``Range: bytes=X-(X+length-1)``
+        - *offset* alone → ``Range: bytes=X-`` (offset to end)
+
+        OneLake DFS may ignore the ``Range`` header and return the full
+        file as a ``200 OK`` response (per RFC 7233 §4.4).  The method
+        accepts both ``200`` and ``206`` as success.
+
+        Args:
+            workspace: Workspace name or GUID.
+            path: Full path within the workspace.
+            offset: Start byte offset.
+            length: Number of bytes to read (requires *offset*).
+            suffix_length: Read the last N bytes of the file.
+            max_bytes: Optional safety limit.  A HEAD request is issued
+                first to check the full file size.  If ``Content-Length``
+                exceeds this value, a
+                :class:`~onelake_client.exceptions.FileTooLargeError`
+                is raised *before* downloading the body.  This prevents
+                OOM when OneLake ignores the ``Range`` header and would
+                return the full file.  Note: files larger than this limit
+                are rejected even if the server would honour Range with
+                a small 206 response (see #50 for a streaming approach).
+
+        Returns:
+            The requested byte range (or full file if server ignores Range).
+
+        Raises:
+            ValueError: If parameters are missing or conflicting.
+            ApiError: If the server returns a non-success status.
+            FileTooLargeError: If the response exceeds *max_bytes*.
+        """
+        if suffix_length is not None and (offset is not None or length is not None):
+            raise ValueError("suffix_length cannot be combined with offset or length")
+        if length is not None and offset is None:
+            raise ValueError("length requires offset")
+        if suffix_length is None and offset is None:
+            raise ValueError("At least one of offset or suffix_length must be provided")
+        if suffix_length is not None and suffix_length <= 0:
+            raise ValueError("suffix_length must be positive")
+        if offset is not None and offset < 0:
+            raise ValueError("offset must be non-negative")
+        if length is not None and length <= 0:
+            raise ValueError("length must be positive")
+
+        if suffix_length is not None:
+            range_value = f"bytes=-{suffix_length}"
+        elif length is not None:
+            range_value = f"bytes={offset}-{offset + length - 1}"
+        else:
+            range_value = f"bytes={offset}-"
+
+        client = await self._get_client()
+        headers = _dfs_headers(await self._auth.dfs_headers_async())
+        url = f"{self._base_url}/{workspace}/{path}"
+
+        # When max_bytes is set, check file size with HEAD first.
+        # OneLake DFS ignores Range headers and returns the full file as 200,
+        # so we must reject large files BEFORE downloading the body.
+        if max_bytes is not None:
+            head_response = await request_with_retry(
+                client, "HEAD", url, headers=headers, on_auth_error=self._on_auth_error
+            )
+            content_length = head_response.headers.get("Content-Length")
+            if content_length is None:
+                # Fail closed — can't verify size, don't risk unbounded download
+                raise ApiError(
+                    head_response.status_code,
+                    message="Cannot enforce max_bytes: server did not report Content-Length",
+                )
+            try:
+                size = int(content_length)
+            except ValueError:
+                raise ApiError(
+                    head_response.status_code,
+                    message=f"Cannot enforce max_bytes: invalid Content-Length {content_length!r}",
+                ) from None
+            if size > max_bytes:
+                raise FileTooLargeError(size=size, max_bytes=max_bytes)
+
+        headers["Range"] = range_value
+
+        response = await request_with_retry(
+            client, "GET", url, headers=headers, on_auth_error=self._on_auth_error
+        )
+
+        # 206 = server honoured the Range; 200 = server returned the full file
+        # (valid per RFC 7233 §4.4 — server MAY ignore Range and send 200).
+        if response.status_code == 200:
+            logger.debug("Range request returned 200 (full file) instead of 206 for %s", path)
+        elif response.status_code != 206:
+            raise ApiError(
+                response.status_code,
+                message=f"Range request returned unexpected status {response.status_code} "
+                "(expected 200 or 206)",
+            )
+
+        return response.content
 
     async def exists(self, workspace: str, path: str) -> bool:
         """Check if a file or directory exists.

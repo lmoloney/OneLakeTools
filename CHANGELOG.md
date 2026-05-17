@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Range read support (`read_file_range`) for DFS client — suffix, offset+length, and offset-only byte range requests, handles both 200 and 206 responses (#26)
+- Delta Analysis engine — reads parquet footers via Range requests and aggregates row group, column chunk, and column-level statistics (#28)
+- Analysis tab in table detail view — lazy-loaded analysis of parquet file statistics with per-file progress (#29)
+
+### Fixed
+
+- Schema tab showing `PrimitiveType("string")` instead of `string` for deltalake >= 1.0 (#28)
+- Range read requests now accept HTTP 200 responses (OneLake DFS returns full file instead of 206 Partial Content per RFC 7233 §4.4)
+- Column Chunks table now includes File column so row groups are distinguishable across files
+
 ## [0.5.0] - 2026-05-16
 
 ### Fixed

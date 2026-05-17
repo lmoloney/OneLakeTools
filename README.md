@@ -19,7 +19,7 @@ onelake-tui
 **Highlights:**
 - Three-panel layout: workspace picker → item list → DFS tree + preview
 - Rich file preview: Markdown, JSON, CSV, Parquet, Avro, syntax-highlighted code
-- Delta table detail: schema, data preview, transaction history, CDF
+- Delta table detail: schema, data preview, transaction history, CDF, parquet analysis
 - Live workspace search, breadcrumb path display, and copy menu (`y`) for HTTPS/ABFSS named+GUID formats
 - Multi-environment support via `--env` flag (PROD, MSIT, DXT, DAILY)
 - Keyboard-driven, zero-config (uses `az login`)
@@ -79,19 +79,19 @@ uv run onelake-tui      # Launch the TUI
 
 ## Testing
 
-**762 tests** across 33 test files — 612 unit + 150 integration, including 8 snapshot regression tests ([syrupy](https://github.com/syrupy-project/syrupy)).
+**879 tests** across 38 test files — 665 unit + 214 integration, including 8 snapshot regression tests ([syrupy](https://github.com/syrupy-project/syrupy)).
 
 ### Test Layers
 
 1. **Unit tests** (`tests/`) — mock-based, no Fabric access needed
-   - Client library: auth, HTTP, DFS, Fabric API, Delta reader (protocol extraction, warnings), Iceberg, models
-   - TUI widgets: smoke, navigation flow, file previews (9 formats), table views (schema/data/history/CDF tabs), tree edge cases
+   - Client library: auth, HTTP, DFS (incl. Range reads + max_bytes HEAD pre-check), Fabric API, Delta reader (protocol extraction, warnings), Delta Analysis engine, Iceberg, models
+   - TUI widgets: smoke, navigation flow, file previews (9 formats), table views (schema/data/history/CDF/analysis tabs), parquet tabbed preview, tree edge cases
    - Fixtures: Delta tables (10 committed fixtures), Parquet files (3 fixtures)
    - Snapshots: Delta metadata + Parquet schema regression detection
 
 2. **Integration tests** (`tests/integration/`) — live Fabric workspace
    - Config: `fabric-test-env.json` manifest (in-repo, auto-detected)
-   - Coverage: DFS browsing, Delta metadata for 15 tables, file operations, schema folders, warehouse + Iceberg, mirrored DBs, protocol features
+   - Coverage: DFS browsing, Delta metadata for 16 tables, Delta Analysis (parametrized across 13 simple + 4 schema-qualified tables), Range reads, file operations, schema folders, warehouse + Iceberg, mirrored DBs, protocol features
    - Both GUID and friendly-name addressing modes tested
 
 ### Running Tests
@@ -142,7 +142,7 @@ OneLakeTools/
 |------|--------|
 | OneLake TUI (Unofficial) | ✅ Working (browse, preview, inspect, copy path) |
 | File preview (MD/JSON/CSV/Parquet/Avro) | ✅ Done |
-| Delta table detail (schema/data/history/CDF) | ✅ Done |
+| Delta table detail (schema/data/history/CDF/analysis) | ✅ Done |
 | Workspace search/filter | ✅ Done |
 | [OneLake CLI](https://github.com/lmoloney/OneLakeTools/issues/11) | 🔲 Planned (`onelake ls`, `onelake cat`, `onelake cp`) |
 | [Download/upload](https://github.com/lmoloney/OneLakeTools/issues/12) | 🔲 Planned |

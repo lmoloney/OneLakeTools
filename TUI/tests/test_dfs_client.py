@@ -269,6 +269,211 @@ async def test_list_paths_403_raises(httpx_mock, auth):
     await client.close()
 
 
+async def test_read_file_range_suffix(httpx_mock, auth):
+    """Suffix range sends Range: bytes=-N and returns partial content."""
+    url = f"{BASE_URL}/my-workspace/MyLakehouse.Lakehouse/Files/data.parquet"
+    httpx_mock.add_response(url=url, status_code=206, content=b"partial data")
+
+    client = DfsClient(auth)
+    result = await client.read_file_range(
+        "my-workspace", "MyLakehouse.Lakehouse/Files/data.parquet", suffix_length=1024
+    )
+
+    assert result == b"partial data"
+    req = httpx_mock.get_requests()[0]
+    assert req.headers["Range"] == "bytes=-1024"
+    await client.close()
+
+
+async def test_read_file_range_offset_length(httpx_mock, auth):
+    """Offset+length range sends Range: bytes=X-Y."""
+    url = f"{BASE_URL}/my-workspace/MyLakehouse.Lakehouse/Files/data.parquet"
+    httpx_mock.add_response(url=url, status_code=206, content=b"partial data")
+
+    client = DfsClient(auth)
+    result = await client.read_file_range(
+        "my-workspace", "MyLakehouse.Lakehouse/Files/data.parquet", offset=100, length=100
+    )
+
+    assert result == b"partial data"
+    req = httpx_mock.get_requests()[0]
+    assert req.headers["Range"] == "bytes=100-199"
+    await client.close()
+
+
+async def test_read_file_range_offset_only(httpx_mock, auth):
+    """Offset-only range sends Range: bytes=X-."""
+    url = f"{BASE_URL}/my-workspace/MyLakehouse.Lakehouse/Files/data.parquet"
+    httpx_mock.add_response(url=url, status_code=206, content=b"partial data")
+
+    client = DfsClient(auth)
+    result = await client.read_file_range(
+        "my-workspace", "MyLakehouse.Lakehouse/Files/data.parquet", offset=100
+    )
+
+    assert result == b"partial data"
+    req = httpx_mock.get_requests()[0]
+    assert req.headers["Range"] == "bytes=100-"
+    await client.close()
+
+
+async def test_read_file_range_accepts_200(httpx_mock, auth):
+    """Server returning 200 (full file) instead of 206 should still succeed.
+
+    Per RFC 7233 §4.4 a server MAY ignore the Range header and return 200.
+    OneLake DFS does this for small files.
+    """
+    url = f"{BASE_URL}/my-workspace/MyLakehouse.Lakehouse/Files/data.parquet"
+    httpx_mock.add_response(url=url, status_code=200, content=b"full file contents")
+
+    client = DfsClient(auth)
+    result = await client.read_file_range(
+        "my-workspace", "MyLakehouse.Lakehouse/Files/data.parquet", suffix_length=1024
+    )
+    assert result == b"full file contents"
+    await client.close()
+
+
+async def test_read_file_range_no_params(auth):
+    """Calling read_file_range with no range params raises ValueError."""
+    client = DfsClient(auth)
+    with pytest.raises(ValueError, match="At least one of"):
+        await client.read_file_range("my-workspace", "MyLakehouse.Lakehouse/Files/data.parquet")
+    await client.close()
+
+
+async def test_read_file_range_suffix_with_offset(auth):
+    """Combining suffix_length with offset raises ValueError."""
+    client = DfsClient(auth)
+    with pytest.raises(ValueError, match="suffix_length cannot be combined"):
+        await client.read_file_range(
+            "my-workspace",
+            "MyLakehouse.Lakehouse/Files/data.parquet",
+            suffix_length=1024,
+            offset=100,
+        )
+    await client.close()
+
+
+async def test_read_file_range_length_without_offset(auth):
+    """Providing length without offset raises ValueError."""
+    client = DfsClient(auth)
+    with pytest.raises(ValueError, match="length requires offset"):
+        await client.read_file_range(
+            "my-workspace",
+            "MyLakehouse.Lakehouse/Files/data.parquet",
+            length=100,
+        )
+    await client.close()
+
+
+async def test_read_file_range_max_bytes_rejects_large_file(httpx_mock, auth):
+    """HEAD pre-check should raise FileTooLargeError before GET for large files."""
+    from onelake_client.exceptions import FileTooLargeError
+
+    url = f"{BASE_URL}/my-workspace/MyLakehouse.Lakehouse/Files/huge.parquet"
+    # HEAD returns large Content-Length
+    httpx_mock.add_response(url=url, method="HEAD", headers={"Content-Length": "500000000"})
+    # GET should NOT be called
+    client = DfsClient(auth)
+    with pytest.raises(FileTooLargeError) as exc_info:
+        await client.read_file_range(
+            "my-workspace",
+            "MyLakehouse.Lakehouse/Files/huge.parquet",
+            suffix_length=1024,
+            max_bytes=1024 * 1024,
+        )
+    assert exc_info.value.size == 500_000_000
+    await client.close()
+
+
+async def test_read_file_range_max_bytes_allows_small_file(httpx_mock, auth):
+    """HEAD pre-check should allow files within max_bytes, then GET succeeds."""
+    url = f"{BASE_URL}/my-workspace/MyLakehouse.Lakehouse/Files/small.parquet"
+    httpx_mock.add_response(url=url, method="HEAD", headers={"Content-Length": "5000"})
+    httpx_mock.add_response(url=url, status_code=200, content=b"file data")
+    client = DfsClient(auth)
+    result = await client.read_file_range(
+        "my-workspace",
+        "MyLakehouse.Lakehouse/Files/small.parquet",
+        suffix_length=1024,
+        max_bytes=1024 * 1024,
+    )
+    assert result == b"file data"
+    await client.close()
+
+
+async def test_read_file_range_no_max_bytes_skips_head(httpx_mock, auth):
+    """Without max_bytes, no HEAD request should be issued."""
+    url = f"{BASE_URL}/my-workspace/MyLakehouse.Lakehouse/Files/data.parquet"
+    httpx_mock.add_response(url=url, status_code=206, content=b"partial")
+    client = DfsClient(auth)
+    result = await client.read_file_range(
+        "my-workspace",
+        "MyLakehouse.Lakehouse/Files/data.parquet",
+        suffix_length=1024,
+    )
+    assert result == b"partial"
+    # Only 1 request (GET), no HEAD
+    assert len(httpx_mock.get_requests()) == 1
+    assert httpx_mock.get_requests()[0].method == "GET"
+    await client.close()
+
+
+async def test_read_file_range_max_bytes_missing_content_length(httpx_mock, auth):
+    """HEAD without Content-Length should fail closed with ApiError."""
+    from onelake_client.exceptions import ApiError
+
+    url = f"{BASE_URL}/my-workspace/MyLakehouse.Lakehouse/Files/no-cl.parquet"
+    httpx_mock.add_response(url=url, method="HEAD", headers={})
+    client = DfsClient(auth)
+    with pytest.raises(ApiError, match="Content-Length"):
+        await client.read_file_range(
+            "my-workspace",
+            "MyLakehouse.Lakehouse/Files/no-cl.parquet",
+            suffix_length=1024,
+            max_bytes=1024 * 1024,
+        )
+    await client.close()
+
+
+async def test_read_file_range_negative_offset(auth):
+    """Negative offset raises ValueError."""
+    client = DfsClient(auth)
+    with pytest.raises(ValueError, match="offset must be non-negative"):
+        await client.read_file_range(
+            "my-workspace",
+            "MyLakehouse.Lakehouse/Files/data.parquet",
+            offset=-1,
+        )
+    await client.close()
+
+
+async def test_read_file_range_zero_suffix(auth):
+    """Zero suffix_length raises ValueError."""
+    client = DfsClient(auth)
+    with pytest.raises(ValueError, match="suffix_length must be positive"):
+        await client.read_file_range(
+            "my-workspace",
+            "MyLakehouse.Lakehouse/Files/data.parquet",
+            suffix_length=0,
+        )
+    await client.close()
+
+
+async def test_read_file_range_zero_length(auth):
+    """Zero length raises ValueError."""
+    client = DfsClient(auth)
+    with pytest.raises(ValueError, match="length must be positive"):
+        await client.read_file_range(
+            "my-workspace",
+            "MyLakehouse.Lakehouse/Files/data.parquet",
+            offset=0,
+            length=0,
+        )
+    await client.close()
+
+
 async def test_read_file_network_timeout(httpx_mock, auth):
     """Test that network timeout is handled during streaming."""
     import httpx

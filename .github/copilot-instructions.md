@@ -118,11 +118,13 @@ TUI/src/
   - Search order: `ONELAKE_TEST_ENV_FILE` env var → `tests/integration/fabric-test-env.json` → `~/.config/onelaketools/fabric-test-env.json` → individual env vars
 - DFS tests must use matching address modes: GUID+GUID or name+name.Type — cannot mix workspace GUID with friendly-name item path (or vice versa)
 - `read_cdf()` returns `arro3.core.Table` (not `pyarrow.Table`) in deltalake >= 1.0
+- Delta Analysis integration tests are parametrized across all table types in `fabric-test-env.json` — simple tables, schema-qualified tables, column mapping, partitioned, deletion vectors, and large tables
+- `read_file_range(max_bytes=...)` enforces limits via HEAD pre-check (fails closed if Content-Length missing)
 
 ```bash
 cd TUI
 uv sync --extra dev
-uv run pytest --ignore=tests/integration  # Unit tests only (fast, ~80s)
+uv run pytest --ignore=tests/integration  # Unit tests only (fast, ~90s)
 uv run pytest tests/integration/ -v       # Integration tests (needs az login, ~5min)
 uv run pytest                             # Everything (needs az login)
 uv run pytest --snapshot-update           # Update snapshots after fixture changes
