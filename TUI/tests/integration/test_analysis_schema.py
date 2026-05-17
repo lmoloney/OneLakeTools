@@ -18,21 +18,7 @@ def _lakehouse_id(item: dict) -> str:
     return item["id"]
 
 
-def _schema_tables(item: dict) -> list[str]:
-    """Build list of schema/table names from manifest."""
-    tables = []
-    for schema, names in item["expected_schemas"].items():
-        for name in names:
-            tables.append(f"{schema}/{name}")
-    return tables
-
-
 # ── Parametrized smoke test ─────────────────────────────────────────────
-
-
-@pytest.fixture
-def schema_tables(lakehouse_schema_item):
-    return _schema_tables(lakehouse_schema_item)
 
 
 @pytest.mark.parametrize(

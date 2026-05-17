@@ -990,9 +990,9 @@ class DetailPanel(VerticalScroll):
             with contextlib.suppress(NoMatches):
                 self.query_one("#analysis-progress", Static).remove()
 
-            await self._render_analysis(analysis_pane, result)
             self._analysis_file_paths = result.file_paths
             self._analysis_result = result
+            await self._render_analysis(analysis_pane, result)
 
         except Exception as e:
             with contextlib.suppress(NoMatches):
