@@ -351,11 +351,17 @@ class DfsClient:
             content_length = head_response.headers.get("Content-Length")
             if content_length is None:
                 # Fail closed — can't verify size, don't risk unbounded download
-                raise FileTooLargeError(size=0, max_bytes=max_bytes)
+                raise ApiError(
+                    head_response.status_code,
+                    message="Cannot enforce max_bytes: server did not report Content-Length",
+                )
             try:
                 size = int(content_length)
             except ValueError:
-                raise FileTooLargeError(size=0, max_bytes=max_bytes) from None
+                raise ApiError(
+                    head_response.status_code,
+                    message=f"Cannot enforce max_bytes: invalid Content-Length {content_length!r}",
+                ) from None
             if size > max_bytes:
                 raise FileTooLargeError(size=size, max_bytes=max_bytes)
 

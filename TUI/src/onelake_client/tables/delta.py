@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 from deltalake.exceptions import DeltaError
 
+from onelake_client.exceptions import ApiError as _ApiError
 from onelake_client.exceptions import FileTooLargeError
 from onelake_client.models.table import (
     Column,
@@ -1003,7 +1004,7 @@ class DeltaTableReader:
                 tail = await self._dfs.read_file_range(
                     ws_guid, file_path, suffix_length=_INITIAL_TAIL, max_bytes=max_file_bytes
                 )
-            except FileTooLargeError:
+            except (FileTooLargeError, _ApiError):
                 logger.warning(
                     "Skipping %s — file exceeds %s byte limit",
                     file_name,

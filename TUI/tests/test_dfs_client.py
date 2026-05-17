@@ -421,13 +421,13 @@ async def test_read_file_range_no_max_bytes_skips_head(httpx_mock, auth):
 
 
 async def test_read_file_range_max_bytes_missing_content_length(httpx_mock, auth):
-    """HEAD without Content-Length should fail closed with FileTooLargeError."""
-    from onelake_client.exceptions import FileTooLargeError
+    """HEAD without Content-Length should fail closed with ApiError."""
+    from onelake_client.exceptions import ApiError
 
     url = f"{BASE_URL}/my-workspace/MyLakehouse.Lakehouse/Files/no-cl.parquet"
     httpx_mock.add_response(url=url, method="HEAD", headers={})
     client = DfsClient(auth)
-    with pytest.raises(FileTooLargeError):
+    with pytest.raises(ApiError, match="Content-Length"):
         await client.read_file_range(
             "my-workspace",
             "MyLakehouse.Lakehouse/Files/no-cl.parquet",
