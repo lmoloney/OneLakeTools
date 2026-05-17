@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 from deltalake.exceptions import DeltaError
 
+from onelake_client.exceptions import FileTooLargeError
 from onelake_client.models.table import (
     Column,
     ColumnChunkInfo,
@@ -936,6 +937,7 @@ class DeltaTableReader:
         table_name: str,
         *,
         max_files: int = 20,
+        max_file_bytes: int = 100 * 1024 * 1024,
         progress_callback: Callable[[int, int, str], Awaitable[None]] | None = None,
     ) -> DeltaAnalysisResult:
         """Analyse a Delta table by reading parquet footers via Range requests.
@@ -949,6 +951,11 @@ class DeltaTableReader:
             item_path: Item path like ``"MyLakehouse.Lakehouse"`` or GUID.
             table_name: Table name under ``Tables/``.
             max_files: Cap on how many data files to inspect.
+            max_file_bytes: Skip files larger than this (bytes).  OneLake
+                ignores Range headers and returns the full file, so this
+                prevents downloading very large files just for the footer.
+                Default 100 MB.  Skipped files are counted in
+                ``summary.files_skipped``.
             progress_callback: Optional ``async (current, total, filename)``
                 callback for progress reporting.
 
@@ -992,10 +999,18 @@ class DeltaTableReader:
             if progress_callback:
                 await progress_callback(idx + 1, len(file_uris), file_name)
 
-            # No max_bytes on the initial read — OneLake returns the full file
-            # regardless of Range header, and we need the footer from any size
-            # file. The max_files cap is the real OOM guard.
-            tail = await self._dfs.read_file_range(ws_guid, file_path, suffix_length=_INITIAL_TAIL)
+            try:
+                tail = await self._dfs.read_file_range(
+                    ws_guid, file_path, suffix_length=_INITIAL_TAIL, max_bytes=max_file_bytes
+                )
+            except FileTooLargeError:
+                logger.warning(
+                    "Skipping %s — file exceeds %s byte limit",
+                    file_name,
+                    max_file_bytes,
+                )
+                files_skipped_analysis += 1
+                continue
 
             metadata = _parse_parquet_footer(tail)
             if metadata is None and len(tail) >= 8 and tail[-4:] == _PARQUET_MAGIC:
@@ -1008,7 +1023,10 @@ class DeltaTableReader:
                     files_skipped_analysis += 1
                     continue
                 tail = await self._dfs.read_file_range(
-                    ws_guid, file_path, suffix_length=footer_len + 8
+                    ws_guid,
+                    file_path,
+                    suffix_length=footer_len + 8,
+                    max_bytes=max_file_bytes,
                 )
                 metadata = _parse_parquet_footer(tail)
 
@@ -1044,6 +1062,8 @@ class DeltaTableReader:
         self,
         workspace: str,
         path: str,
+        *,
+        max_file_bytes: int = 100 * 1024 * 1024,
     ) -> DeltaAnalysisResult:
         """Analyse a single parquet file by reading its footer.
 
@@ -1054,6 +1074,8 @@ class DeltaTableReader:
         Args:
             workspace: Workspace name or GUID.
             path: Full DFS path to the parquet file.
+            max_file_bytes: Reject files larger than this (bytes).
+                Default 100 MB.
 
         Returns:
             :class:`DeltaAnalysisResult` with a single file entry.
@@ -1066,14 +1088,18 @@ class DeltaTableReader:
         _INITIAL_TAIL = 64 * 1024
         _MAX_FOOTER_BYTES = 16 * 1024 * 1024
 
-        raw = await self._dfs.read_file_range(workspace, path, suffix_length=_INITIAL_TAIL)
+        raw = await self._dfs.read_file_range(
+            workspace, path, suffix_length=_INITIAL_TAIL, max_bytes=max_file_bytes
+        )
 
         metadata = _parse_parquet_footer(raw)
         if metadata is None and len(raw) >= 8 and raw[-4:] == _PARQUET_MAGIC:
             footer_len = struct.unpack("<I", raw[-8:-4])[0]
             if footer_len + 8 > _MAX_FOOTER_BYTES:
                 raise DeltaError(f"Parquet footer too large ({footer_len} bytes): {path}")
-            raw = await self._dfs.read_file_range(workspace, path, suffix_length=footer_len + 8)
+            raw = await self._dfs.read_file_range(
+                workspace, path, suffix_length=footer_len + 8, max_bytes=max_file_bytes
+            )
             metadata = _parse_parquet_footer(raw)
 
         if metadata is None:
